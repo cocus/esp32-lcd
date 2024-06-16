@@ -26,6 +26,9 @@
    extern uint8_t FrameBuffer[FRAME_SIZE];
 #endif
 
+
+#define ESP32_CRAP_ALIGN(address) ((address & 0xfffffffc) | (uint32_t)bytePosLkp[address & 3])
+extern int bytePosLkp[4];
 extern int16_t ProjectionMatrix[16];
 extern int16_t ModelviewMatrix[16];
 extern int CNFGPenX, CNFGPenY;
@@ -34,7 +37,6 @@ extern uint8_t CNFGLastColor;
 
 void CNFGTackSegment( int x0, int y0, int x1, int y1 );
 int LABS( int x );
-void (*CNFGTackPixel)( int x, int y ); //Unsafe plot pixel.
 void LocalToScreenspace( int16_t * coords_3v, int16_t * o1, int16_t * o2 );
 int16_t tdSIN( uint8_t iv );
 int16_t tdCOS( uint8_t iv );
@@ -43,7 +45,7 @@ int16_t tdCOS( uint8_t iv );
 //  1   : Black
 void CNFGColor( uint8_t col ); 
 void CNFGClearScreen(uint8_t pattern);
-void CNFGLoadBitmap(uint8_t* pImg);
+void CNFGLoadBitmap(uint8_t* pImg, uint16_t x, uint16_t y, uint16_t width, uint16_t height);
 
 void  tdTranslate( int16_t * f, int16_t x, int16_t y, int16_t z );		//Operates ON f
 void  tdScale( int16_t * f, int16_t x, int16_t y, int16_t z );			//Operates ON f

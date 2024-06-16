@@ -423,6 +423,8 @@ void LocalToScreenspace(int16_t *coords_3v, int16_t *o1, int16_t *o2)
 // the bytes have to be sent to the I2S peripheral in 2,3,0,1 order if you want them to appear at the bus interface in 0,1,2,3 order
 int bytePosLkp[4] = {2, 3, 0, 1};
 
+void (*CNFGTackPixel)(int x, int y); // Unsafe plot pixel.
+
 void CNFGTackPixelB(int x, int y)
 {
 #ifdef DOUBLE_BUFFERED
@@ -430,12 +432,9 @@ void CNFGTackPixelB(int x, int y)
 #else
     uint8_t *pFrame = FrameBuffer;
 #endif
-    int pktIndex = x / 4;        // 4 bit data bus, 4 bit packet (plus syncs) transmitted each clock
-    int w32Index = pktIndex / 4; // i2s bus is 32bits = 4 bytes, each byte encodes the 4bit data + hsync + vsync
-    int lkpIndex = pktIndex & 3; // we need to transpose the bytes sent to i2s peripheral to ensure they come out in the right order :-(
-    int byteIndex = y * NUM_ROW_BYTES + w32Index * 4 + bytePosLkp[lkpIndex];
+    uint32_t pos = ((164 * (y + 1)) + 1) + x / 4;
     int bitPos = x & 3;
-    pFrame[byteIndex] |= (uint8_t)(0x8 >> bitPos); //  set the bit
+    pFrame[ESP32_CRAP_ALIGN(pos)] |= (uint8_t)(0x8 >> bitPos); //  set the bit
 }
 
 void CNFGTackPixelW(int x, int y)
@@ -445,15 +444,10 @@ void CNFGTackPixelW(int x, int y)
 #else
     uint8_t *pFrame = FrameBuffer;
 #endif
-    int pktIndex = x / 4;        // 4 bit data bus, 4 bit packet (plus syncs) transmitted each clock
-    int w32Index = pktIndex / 4; // i2s bus is 32bits = 4 bytes, each byte encodes the 4bit data + hsync + vsync
-    int lkpIndex = pktIndex & 3; // we need to transpose the bytes sent to i2s peripheral to ensure they come out in the right order :-(
-    int byteIndex = y * NUM_ROW_BYTES + w32Index * 4 + bytePosLkp[lkpIndex];
+    uint32_t pos = ((164 * (y + 1)) + 1) + x / 4;
     int bitPos = x & 3;
-    pFrame[byteIndex] &= ~(uint8_t)(0x8 >> bitPos); // clear the bit
+    pFrame[ESP32_CRAP_ALIGN(pos)] &= ~(uint8_t)(0x8 >> bitPos); // clear the bit
 }
-
-#define ESP32_CRAP_ALIGN(address) ((address & 0xfffffffc) | (uint32_t)bytePosLkp[address & 3])
 
 void CNFGClearScreen(uint8_t pattern)
 {
@@ -463,35 +457,35 @@ void CNFGClearScreen(uint8_t pattern)
     uint8_t *pPkt = FrameBuffer;
 #endif
 
-
     uint32_t pos = 0;
-
-    for (pos = 0; pos < sizeof(FrameBuffer[0]); pos++)
-    {
-        FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(pos)] = 0; //(pos & 0xf);
-    }
-
-    pos = 0;
 
     for (pos = 0; pos < sizeof(FrameBuffer[0]); pos++)
     {
         uint32_t in_frame = pos % (uint32_t)164;
 
         // t=0 => HS
-        if (in_frame == 0) {
-            FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(pos)] |= BIT_HS;
+        if (in_frame == 0)
+        {
+            pPkt[ESP32_CRAP_ALIGN(pos)] |= BIT_HS;
+        }
+        else
+        {
+            pPkt[ESP32_CRAP_ALIGN(pos)] = pattern & 0xf;
         }
 
         // slot 4-348 => VS
-        if ((pos >= 2+164) && (pos <= 2+164 + 163)) {
-            FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(pos)] |= BIT_VS;
+        if ((pos >= 2 + 164) && (pos <= 2 + 164 + 163))
+        {
+            pPkt[ESP32_CRAP_ALIGN(pos)] |= BIT_VS;
         }
 
         // t>3 && t<163
-        if (pos >= 163) {
-            // slot 4-340 => clock
-            if ((in_frame >= 3) && (in_frame <= 162)) {
-                FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(pos)] |= BIT_CLK;
+        if (pos >= 163)
+        {
+            // slot 4-340 => clock on
+            if ((in_frame >= 3) && (in_frame <= 162))
+            {
+                // FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(pos)] |= BIT_CLK;
             }
         }
     }
@@ -508,29 +502,16 @@ void CNFGClearLine(uint8_t pattern, int ln)
     pattern &= 0xf;
     for (int row = ln; row < ln + 8; row++)
     {
-        uint8_t d4;
-        int col;
-        for (col = 0; col < NUM_COLS / 4; col++)
+        uint32_t starting_pos = ((164 * (row + 1)) + 1);
+        for (uint32_t pos = starting_pos; pos < starting_pos + (NUM_COLS / 4); pos++)
         {
-            d4 = ((row == 0 && col > 5) || (row == 1 && col < 5)) ? BIT_VS | pattern : pattern; // encode vsync (1 line wide pulse)
-            *pPkt++ = d4;
+            pPkt[ESP32_CRAP_ALIGN(pos)] &= 0xf0;
+            pPkt[ESP32_CRAP_ALIGN(pos)] |= pattern;
         }
-        // The LCD expects a short ( < 1/2 clock period) +ve hsync pulse on the last 4bit packet for the line, and latches the line
-        // on the HS pulse falling edge.
-        // But the i2s parallel bus generated hsync is 1 clock wide, synchronous to the clock edge. The LCD ignores the
-        // data in all packets with HS high. So we simply generate 4 additional packets with HS high, AFTER transmitting
-        // a full row of pixels. We send 4 packets (32bits) so that we are in i2s byte order sync for the next row.
-        d4 = BIT_HS;
-        if ((row == 0 && col > 5) || (row == 1 && col < 5))
-            d4 |= BIT_VS;
-        *pPkt++ = d4;
-        *pPkt++ = d4;
-        *pPkt++ = d4;
-        *pPkt++ = d4;
     }
 }
 
-void CNFGLoadBitmap(uint8_t *pImg)
+void CNFGLoadBitmap(uint8_t *pImg, uint16_t x, uint16_t y, uint16_t width, uint16_t height)
 {
 #ifdef DOUBLE_BUFFERED
     uint8_t *pPkt = FrameBuffer[DrawBufID];
@@ -538,43 +519,32 @@ void CNFGLoadBitmap(uint8_t *pImg)
     uint8_t *pPkt = FrameBuffer;
 #endif
     uint32_t pos = 0;
-
-    pPkt += 164;
-
     uint8_t *pSrc = pImg;
-    for (int row = 0; row < NUM_ROWS; row++)
+    uint16_t max_row = ((y + height) > NUM_ROWS) ? NUM_ROWS : y + height;
+    uint16_t max_col = ((x + width) > NUM_COLS) ? NUM_COLS : x + width;
+
+    for (int row = y; row < max_row; row++)
     {
-        uint8_t d4;
-        int col = 0;
-        while (col < NUM_COLS / 4)
+        pos = (164 * (row + 1)) + 1 + (x / 4);
+
+        for (int col = x / 4; col < max_col / 4; col += 4)
         {
             uint8_t d8a = *pSrc++;
             uint8_t d8b = *pSrc++;
-            d4 = d8b >> 4;
-            *pPkt |= d4;
-            pPkt++;
-            col++;
 
-            d4 = d8b & 0xf;
-            *pPkt |= d4;
-            pPkt++;
-            col++;
+            pPkt[ESP32_CRAP_ALIGN(pos)] |= d8a >> 4;
+            pos++;
 
-            d4 = d8a >> 4;
-            *pPkt |= d4;
-            pPkt++;
-            col++;
+            pPkt[ESP32_CRAP_ALIGN(pos)] |= d8a & 0xf;
+            pos++;
 
-            d4 = d8a & 0xf;
-            *pPkt |= d4;
-            pPkt++;
-            col++;
+            pPkt[ESP32_CRAP_ALIGN(pos)] |= d8b >> 4;
+            pos++;
+
+            pPkt[ESP32_CRAP_ALIGN(pos)] |= d8b & 0xf;
+            pos++;
         }
-            pPkt++;
-            pPkt++;
-            pPkt++;
     }
-
 }
 
 void CNFGColor(uint8_t col)

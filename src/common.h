@@ -14,7 +14,7 @@
 #include "esp_event.h"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
-#include "driver/timer.h"
+#include "driver/gptimer.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "lwip/err.h"

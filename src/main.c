@@ -1,3 +1,6 @@
+#include "esp_system.h"
+#include "esp_app_desc.h"
+
 #include "common.h"
 #include "config.h"
 #include "i2s_parallel.h"
@@ -59,64 +62,55 @@ void DrawSphere(int frameIndex)
 void lcd_config()
 {
 #ifdef DOUBLE_BUFFERED
-    i2s_parallel_buffer_desc_t bufdesc[2];
+    i2s_parallel_buffer_desc_t bufdesc[2] = {
+        {.memory = &FrameBuffer[0], .size = sizeof(FrameBuffer[0])},
+        {.memory = &FrameBuffer[1], .size = sizeof(FrameBuffer[1])},
+    };
+#else
+    i2s_parallel_buffer_desc_t bufdesc = {
+        .memory = &FrameBuffer, .size = sizeof(FrameBuffer)};
+#endif
+
     i2s_parallel_config_t cfg = {
         .gpio_bus = {
-            16,         // 0 : d0
-            4,          // 1 : d1
-            2,          // 2 : d2
-            15,         // 3 : d3
-            18,         // 4 : HS
-            19,         // 5 : VS
-            0,          // 6 : CLK_EN
-            -1},        // 7 : unused
+            16, // 0 : d0
+            4,  // 1 : d1
+            2,  // 2 : d2
+            15, // 3 : d3
+            18, // 4 : HS
+            19, // 5 : VS
+            -1, // 6 : CLK_EN gate
+            -1  // 7 : unused
+        },
         .gpio_clk = 17, // XCK
 
         .bits = I2S_PARALLEL_BITS_8,
-        .clkspeed_hz =  2 * 1000 * 1410, // resulting pixel clock = 1.455MHz
-        .bufa = &bufdesc[0],
-        .bufb = &bufdesc[1]};
+        .clkspeed_hz = 2 * 1000 * 1500, // resulting pixel clock = 1.5MHz (~42fps)
 
-    bufdesc[0].memory = FrameBuffer[0];
-    bufdesc[0].size = FRAME_SIZE;
-    bufdesc[1].memory = FrameBuffer[1];
-    bufdesc[1].size = FRAME_SIZE;
+#ifdef DOUBLE_BUFFERED
+        .bufa = &bufdesc[0],
+        .bufb = &bufdesc[1]
+#else
+        .buf = &bufdesc
+#endif
+    };
+
+#ifdef DOUBLE_BUFFERED
     // make sure both front and back buffers have encoded syncs
-    DrawBufID = 0;
-    CNFGClearScreen(0);
     DrawBufID = 1;
     CNFGClearScreen(0);
-#else
-    i2s_parallel_buffer_desc_t bufdesc;
-    i2s_parallel_config_t cfg = {
-        .gpio_bus = {
-            16,         // 0 : d0
-            4,          // 1 : d1
-            2,          // 2 : d2
-            15,         // 3 : d3
-            13,         // 4 : HS
-            14,         // 5 : VS
-            -1,         // 6 : unused
-            -1},        // 7 : unused
-        .gpio_clk = 17, // XCK
-
-        .bits = I2S_PARALLEL_BITS_8,
-        .clkspeed_hz = 2 * 1000 * 1000, // resulting pixel clock = 1MHz
-        .buf = &bufdesc};
-
-    bufdesc.memory = FrameBuffer;
-    bufdesc.size = FRAME_SIZE;
+    DrawBufID = 0;
+#endif
     // make sure buffer has encoded syncs
     CNFGClearScreen(0);
-#endif
 
     // this lcd power up sequence must be followed to avoid damage
     delayMs(50); // allow supply voltage to stabilize
     i2s_parallel_setup(&I2S1, &cfg);
     delayMs(50);
-    //digitalWrite(PIN_BIAS_EN, 1); // enable lcd bias voltage V0 after clocks are available
+    // digitalWrite(PIN_BIAS_EN, 1); // enable lcd bias voltage V0 after clocks are available
     delayMs(50);
-    //digitalWrite(PIN_DPY_EN, 1); // enable lcd
+    // digitalWrite(PIN_DPY_EN, 1); // enable lcd
 }
 
 void lcdTask(void *pvParameters)
@@ -126,13 +120,15 @@ void lcdTask(void *pvParameters)
 
     lcd_config();
 
-    //CNFGClearScreen(0);
+    // CNFGClearScreen(0);
     i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
-    uint8_t *pImg = (counter / 100) & 1 ? (uint8_t *)lenaBitmap : (uint8_t *)rectBitmap;
-    CNFGLoadBitmap(pImg);
-
-    //DrawBufID ^= 1;
-    while(1) { delayMs(1000); };
+    // uint8_t *pImg = (counter / 100) & 1 ? (uint8_t *)lenaBitmap : (uint8_t *)rectBitmap;
+    // CNFGLoadBitmap(lenaBitmap);
+    // FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(163)] |= 1;
+    // FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(165)] |= 1;
+    // FrameBuffer[DrawBufID][168] |= 1;
+    // DrawBufID ^= 1;
+    // while(1) { delayMs(1000); };
     while (1)
     {
 
@@ -151,7 +147,7 @@ void lcdTask(void *pvParameters)
                 sprintf(sztext, "%02d:%02d%s", CNFGPenX, CNFGPenY, rand() & 1 ? "pm" : "am");
                 CNFGDrawText(sztext, 3 + (rand() % 8));
                 uint32_t elapsedUs = cct_ElapsedTimeUs();
-                ESP_LOGI(TAG, "vector txt : %dus\r\n", elapsedUs);
+                ESP_LOGI(TAG, "vector txt : %luus", elapsedUs);
 #ifdef DOUBLE_BUFFERED
                 i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
                 DrawBufID ^= 1;
@@ -180,8 +176,15 @@ void lcdTask(void *pvParameters)
                 gfx_printSz(56, 0, "massa eu hendrerit. Ut sed nisi lorem.");
                 gfx_printSz(64, 0, "In vestibulum purus a tortor imperdiet");
                 gfx_printSz(72, 0, "posuere.");
+                gfx_printSz(88, 0, "Cocus Was Here :D");
+
+                gfx_printf(96, 0, "%s built on %s %s",
+                           esp_app_get_description()->project_name,
+                           esp_app_get_description()->date,
+                           esp_app_get_description()->time);
+
                 uint32_t elapsedUs = cct_ElapsedTimeUs();
-                ESP_LOGI(TAG, "bitmap txt : %dus\r\n", elapsedUs);
+                ESP_LOGI(TAG, "bitmap txt : %luus", elapsedUs);
 #ifdef DOUBLE_BUFFERED
                 i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
                 DrawBufID ^= 1;
@@ -200,9 +203,9 @@ void lcdTask(void *pvParameters)
                 cct_SetMarker();
                 CNFGClearScreen(0);
                 uint8_t *pImg = (counter / 100) & 1 ? (uint8_t *)lenaBitmap : (uint8_t *)rectBitmap;
-                CNFGLoadBitmap(pImg);
+                CNFGLoadBitmap(pImg, (NUM_COLS - 240) / 2, (NUM_ROWS - 160) / 2, 240, 160);
                 uint32_t elapsedUs = cct_ElapsedTimeUs();
-                ESP_LOGI(TAG, "Load bmp : %dus\r\n", elapsedUs);
+                ESP_LOGI(TAG, "Load bmp : %luus", elapsedUs);
 #ifdef DOUBLE_BUFFERED
                 i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
                 DrawBufID ^= 1;
@@ -219,8 +222,8 @@ void lcdTask(void *pvParameters)
         case 3:
             cct_SetMarker();
             DrawSphere(counter % 240);
-            uint32_t elapsedUs = cct_ElapsedTimeUs();
-            // ESP_LOGI(TAG,"Draw sph : %dus\r\n", elapsedUs);
+            // uint32_t elapsedUs = cct_ElapsedTimeUs();
+            // ESP_LOGI(TAG,"Draw sph : %dus", elapsedUs);
 #ifdef DOUBLE_BUFFERED
             i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
             DrawBufID ^= 1;
@@ -234,11 +237,11 @@ void lcdTask(void *pvParameters)
 
 void app_main()
 {
-    //pinMode(PIN_DPY_EN, OUTPUT);
-    //digitalWrite(PIN_DPY_EN, 0);
-    //pinMode(PIN_BIAS_EN, OUTPUT);
-    //digitalWrite(PIN_BIAS_EN, 0);
-    //pinMode(PIN_BTN, INPUT_PULLUP);
+    // pinMode(PIN_DPY_EN, OUTPUT);
+    // digitalWrite(PIN_DPY_EN, 0);
+    // pinMode(PIN_BIAS_EN, OUTPUT);
+    // digitalWrite(PIN_BIAS_EN, 0);
+    // pinMode(PIN_BTN, INPUT_PULLUP);
 
     xTaskCreatePinnedToCore(&lcdTask, "lcdTask", 2048, NULL, 20, NULL, 1);
 }
