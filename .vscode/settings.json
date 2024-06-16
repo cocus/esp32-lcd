@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "esp_event_loop.h": "c",
+        "semphr.h": "c",
+        "io_mux_reg.h": "c",
+        "tcpip_adapter.h": "c",
+        "i2s_parallel.h": "c",
+        "i2s_struct.h": "c",
+        "config.h": "c"
+    }
+}
