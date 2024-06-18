@@ -1,4 +1,6 @@
 // Copyright 2017 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2017 har-in-air https://github.com/har-in-air
+// Copyright 2024 Santiago Hormazabal https://github.com/cocus
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,37 +17,34 @@
 // modified for 8bit lcd mode with encoded Hsync and Vsync pulses,
 // double buffered frame  HN
 
+#include "i2s_parallel.h"
+
 #include "common.h"
 
-#include "soc/i2s_struct.h"
 #include "soc/i2s_reg.h"
 #include "esp_private/periph_ctrl.h"
 #include "soc/io_mux_reg.h"
 #include "rom/lldesc.h"
 #include "rom/gpio.h"
 #include "esp_heap_caps.h"
-#include "i2s_parallel.h"
 #include "soc/gpio_periph.h"
 
 #define TAG "i2s_parallel"
 
-#ifdef DOUBLE_BUFFERED
 typedef struct
 {
+#ifdef DOUBLE_BUFFERED
     volatile lldesc_t *dmadesc_a;
     volatile lldesc_t *dmadesc_b;
     int desccount_a;
     int desccount_b;
-} i2s_parallel_state_t;
 #else
-typedef struct
-{
     volatile lldesc_t *dmadesc;
     int desccount;
-} i2s_parallel_state_t;
 #endif
+} i2s_parallel_state_t;
 
-static i2s_parallel_state_t i2s_state[2];// = {NULL, NULL};
+static i2s_parallel_state_t i2s_state[2];
 
 #define DMA_MAX (4096 - 4)
 
@@ -65,7 +64,9 @@ static void fill_dma_desc(volatile lldesc_t *dmadesc, i2s_parallel_buffer_desc_t
     {
         int dmalen = len;
         if (dmalen > DMA_MAX)
+        {
             dmalen = DMA_MAX;
+        }
         dmadesc[n].size = dmalen;
         dmadesc[n].length = dmalen;
         dmadesc[n].buf = data;
@@ -78,6 +79,7 @@ static void fill_dma_desc(volatile lldesc_t *dmadesc, i2s_parallel_buffer_desc_t
         data += dmalen;
         n++;
     }
+
     // Loop last back to first
     dmadesc[n - 1].qe.stqe_next = (lldesc_t *)&dmadesc[0];
     ESP_LOGI(TAG, "fill_dma_desc: filled %d descriptors", n);
@@ -86,7 +88,9 @@ static void fill_dma_desc(volatile lldesc_t *dmadesc, i2s_parallel_buffer_desc_t
 static void gpio_setup_out(int gpio, int sig, int inv)
 {
     if (gpio == -1)
+    {
         return;
+    }
     PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[gpio], PIN_FUNC_GPIO);
     gpio_set_direction(gpio, GPIO_MODE_DEF_OUTPUT);
     gpio_matrix_out(gpio, sig, inv, false);
@@ -108,7 +112,7 @@ static void fifo_reset(i2s_dev_t *dev)
     dev->conf.tx_fifo_reset = 0;
 }
 
-static int i2snum(i2s_dev_t *dev)
+static inline int i2snum(i2s_dev_t *dev)
 {
     return (dev == &I2S0) ? 0 : 1;
 }
@@ -116,8 +120,9 @@ static int i2snum(i2s_dev_t *dev)
 void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
 {
     // Figure out which signal numbers to use for routing
-    ESP_LOGI(TAG, "Setting up parallel I2S bus at I2S%d", i2snum(dev));
     int sig_data_base, sig_clk;
+
+    ESP_LOGI(TAG, "Setting up parallel I2S bus at I2S%d", i2snum(dev));
     if (dev == &I2S0)
     {
         sig_data_base = I2S0O_DATA_OUT0_IDX;
@@ -125,11 +130,7 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     }
     else
     {
-        if (cfg->bits == I2S_PARALLEL_BITS_32)
-        {
-            sig_data_base = I2S1O_DATA_OUT0_IDX;
-        }
-        else if (cfg->bits == I2S_PARALLEL_BITS_8)
+        if (cfg->bits == I2S_PARALLEL_BITS_32 || cfg->bits == I2S_PARALLEL_BITS_8)
         {
             sig_data_base = I2S1O_DATA_OUT0_IDX;
         }
@@ -142,43 +143,49 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     }
 
     // Route the signals
-    gpio_setup_out(cfg->gpio_bus[0], sig_data_base + 0, false); // D0
-    gpio_setup_out(cfg->gpio_bus[1], sig_data_base + 1, false); // D1
-    gpio_setup_out(cfg->gpio_bus[2], sig_data_base + 2, false); // D2
-    gpio_setup_out(cfg->gpio_bus[3], sig_data_base + 3, false); // D3
-    gpio_setup_out(cfg->gpio_bus[4], sig_data_base + 4, false); // HS
-    gpio_setup_out(cfg->gpio_bus[5], sig_data_base + 5, false); // VS
-    if (cfg->gpio_bus[6] != -1) {
-        gpio_setup_out(cfg->gpio_bus[6], sig_data_base + 6, false); // CLK_EN
+    for (size_t i = 0; i < cfg->num_gpio && i < sizeof(cfg->gpio_bus)/sizeof(cfg->gpio_bus[0]); i++)
+    {
+        gpio_setup_out(cfg->gpio_bus[i].gpio, sig_data_base + i, cfg->gpio_bus[i].inverted);
+        gpio_set_level(cfg->gpio_bus[i].gpio, cfg->gpio_bus[i].initial_value);
     }
     gpio_setup_out(cfg->gpio_clk, sig_clk, false); // CLK
 
+    // TODO: move this out of here.
     // reset sequence #1: all signals to 0
-    gpio_set_level(cfg->gpio_bus[4], 0);    // HS
-    gpio_set_level(cfg->gpio_bus[5], 0);    // VS
-    if (cfg->gpio_bus[6] != -1) {
-        gpio_set_level(cfg->gpio_bus[6], 0);    // CLK_EN
+    gpio_set_level(cfg->gpio_bus[4].gpio, 0); // HS
+    gpio_set_level(cfg->gpio_bus[5].gpio, 0); // VS
+#if 0
+    if (cfg->gpio_bus[6] != -1)
+    {
+        gpio_set_level(cfg->gpio_bus[6], 0); // CLK_EN
     }
-    gpio_set_level(cfg->gpio_clk, 0);       // CLK
-    delayMs(168); // wait for 168ms
+#endif
+    gpio_set_level(cfg->gpio_clk, 0); // CLK
+    delayMs(168);                     // wait for 168ms
 
     // reset sequence #2: all signals to 1
-    gpio_set_level(cfg->gpio_bus[4], 1);    // HS
-    gpio_set_level(cfg->gpio_bus[5], 1);    // VS
-    if (cfg->gpio_bus[6] != -1) {
-        gpio_set_level(cfg->gpio_bus[6], 1);    // CLK_EN
+    gpio_set_level(cfg->gpio_bus[4].gpio, 1); // HS
+    gpio_set_level(cfg->gpio_bus[5].gpio, 1); // VS
+#if 0
+    if (cfg->gpio_bus[6] != -1)
+    {
+        gpio_set_level(cfg->gpio_bus[6], 1); // CLK_EN
     }
-    gpio_set_level(cfg->gpio_clk, 1);       // CLK
-    delayMs(168); // wait for 168ms
+#endif
+    gpio_set_level(cfg->gpio_clk, 1); // CLK
+    delayMs(168);                     // wait for 168ms
 
     // reset sequence #3: all signals back to 0
-    gpio_set_level(cfg->gpio_bus[4], 0);    // HS
-    gpio_set_level(cfg->gpio_bus[5], 0);    // VS
-    if (cfg->gpio_bus[6] != -1) {
-        gpio_set_level(cfg->gpio_bus[6], 0);    // CLK_EN
+    gpio_set_level(cfg->gpio_bus[4].gpio, 0); // HS
+    gpio_set_level(cfg->gpio_bus[5].gpio, 0); // VS
+#if 0
+    if (cfg->gpio_bus[6] != -1)
+    {
+        gpio_set_level(cfg->gpio_bus[6], 0); // CLK_EN
     }
-    gpio_set_level(cfg->gpio_clk, 0);       // CLK
-    delayMs(168); // wait for 168ms
+#endif
+    gpio_set_level(cfg->gpio_clk, 0); // CLK
+    delayMs(168);                     // wait for 168ms
 
     // Power on I2S dev
     if (dev == &I2S0)
@@ -240,7 +247,6 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     dev->timing.val = 0;
 
     // Allocate DMA descriptors
-    //i2s_state[i2snum(dev)] = malloc(sizeof(i2s_parallel_state_t));
     i2s_parallel_state_t *st = &i2s_state[i2snum(dev)];
 #ifdef DOUBLE_BUFFERED
     st->desccount_a = calc_needed_dma_descs_for(cfg->bufa);
@@ -288,7 +294,6 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
 }
 
 #ifdef DOUBLE_BUFFERED
-
 // Flip to a buffer: 0 for bufa, 1 for bufb
 void i2s_parallel_flip_to_buffer(i2s_dev_t *dev, int bufid)
 {
@@ -306,5 +311,4 @@ void i2s_parallel_flip_to_buffer(i2s_dev_t *dev, int bufid)
     i2s_state[no].dmadesc_a[i2s_state[no].desccount_a - 1].qe.stqe_next = active_dma_chain;
     i2s_state[no].dmadesc_b[i2s_state[no].desccount_b - 1].qe.stqe_next = active_dma_chain;
 }
-
 #endif
