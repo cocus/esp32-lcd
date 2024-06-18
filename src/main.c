@@ -7,6 +7,9 @@
 #include "gfx3d.h"
 #include "cct.h"
 
+#include "driver/ledc.h"
+
+
 // #include "rectbmp.h"
 // #include "lenabmp.h"
 
@@ -344,6 +347,16 @@ void esp32_lcd_thing_flush(void)
     //  DrawBufID ^= 1;
 }
 
+
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_LOW_SPEED_MODE
+#define LEDC_OUTPUT_IO          (21) // Define the output GPIO
+#define LEDC_CHANNEL            LEDC_CHANNEL_0
+#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
+#define LEDC_FREQUENCY          (480) // Frequency in Hertz. Set frequency at 
+
+
 void lcdTask(void *pvParameters)
 {
     lcd_config();
@@ -368,7 +381,7 @@ void lcdTask(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(10));
 
         uint32_t elapsedUs = cct_ElapsedTimeUs();
-        if (elapsedUs >= 1000)
+        if (elapsedUs >= 10000)
         {
             if (++pb > 100)
             {
@@ -376,7 +389,15 @@ void lcdTask(void *pvParameters)
             }
             UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
             cct_SetMarker();
+
+            // Set duty to 50%
+            //ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
+            // Update duty to apply the new value
+            //ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+
         }
+
+
 
         GUI_Process();
     }
@@ -499,6 +520,40 @@ void lcdTask(void *pvParameters)
 #endif
 }
 
+
+/* Warning:
+ * For ESP32, ESP32S2, ESP32S3, ESP32C3, ESP32C2, ESP32C6, ESP32H2, ESP32P4 targets,
+ * when LEDC_DUTY_RES selects the maximum duty resolution (i.e. value equal to SOC_LEDC_TIMER_BIT_WIDTH),
+ * 100% duty cycle is not reachable (duty cannot be set to (2 ** SOC_LEDC_TIMER_BIT_WIDTH)).
+ */
+
+static void example_ledc_init(void)
+{
+    // Prepare and then apply the LEDC PWM timer configuration
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_MODE,
+        .duty_resolution  = LEDC_DUTY_RES,
+        .timer_num        = LEDC_TIMER,
+        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 4 kHz
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode     = LEDC_MODE,
+        .channel        = LEDC_CHANNEL,
+        .timer_sel      = LEDC_TIMER,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = LEDC_OUTPUT_IO,
+        .duty           = 0, // Set duty to 0%
+        .hpoint         = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+}
+
+
+
 void app_main()
 {
     // pinMode(PIN_DPY_EN, OUTPUT);
@@ -506,6 +561,13 @@ void app_main()
     // pinMode(PIN_BIAS_EN, OUTPUT);
     // digitalWrite(PIN_BIAS_EN, 0);
     // pinMode(PIN_BTN, INPUT_PULLUP);
+
+    example_ledc_init();
+
+    // Set duty to 50%
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*99)));
+    // Update duty to apply the new value
+    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
     xTaskCreatePinnedToCore(&lcdTask, "lcdTask", 4096, NULL, 20, NULL, 1);
 }
