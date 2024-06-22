@@ -302,7 +302,7 @@ void GUI_Setup(UG_DEVICE *device)
 
     UG_TextboxCreate(&wnd, &txt3, TXB_ID_3, UGUI_POS(INITIAL_MARGIN * 2 + BTN_WIDTH + CHB_WIDTH, OBJ_Y(3), 100, 53));
     UG_TextboxSetFont(&wnd, TXB_ID_3, FONT_32X53);
-    UG_TextboxSetText(&wnd, TXB_ID_3, "ABC");
+    UG_TextboxSetText(&wnd, TXB_ID_3, "50");
 #if !defined(UGUI_USE_COLOR_BW)
     UG_TextboxSetBackColor(&wnd, TXB_ID_3, C_PALE_TURQUOISE);
 #endif
@@ -357,7 +357,7 @@ void esp32_lcd_thing_flush(void)
 #define LEDC_CHANNEL            LEDC_CHANNEL_0
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 #define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
-#define LEDC_FREQUENCY          (480) // Frequency in Hertz. Set frequency at 
+#define LEDC_FREQUENCY          (505) // Frequency in Hertz. Set frequency at 
 
 
 
@@ -394,7 +394,10 @@ void lcdTask(void *pvParameters)
         return;
     }
 
+    uint8_t scan_matrix[] = { 0xfe, 0xfd, 0xfb };
+    uint8_t pushed[3] = { 0xfe, 0xfd, 0xfb };
     uint8_t pb = 0;
+    char buffer[10] = { '\0' };
     cct_SetMarker();
 
     while (1)
@@ -405,11 +408,6 @@ void lcdTask(void *pvParameters)
         uint32_t elapsedUs = cct_ElapsedTimeUs();
         if (elapsedUs >= 10000)
         {
-            if (++pb > 100)
-            {
-                pb = 0;
-            }
-            UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
             cct_SetMarker();
 
             // Set duty to 50%
@@ -417,29 +415,78 @@ void lcdTask(void *pvParameters)
             // Update duty to apply the new value
             //ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
+            // col0: 0xee, 0xde, 0xbe
+            // col1: 0xbd, 0xed, 0xdd, 0xf5
+            // col2: 0xf3, 0xeb, 0xdb, 0xbb
 
-            int data_addr = 0;
+            uint8_t scan_result[3] = { 0, 0, 0 };
+            for (int scan_idx = 0; scan_idx < 3; scan_idx++)
+            {
+                uint8_t data;
+                data = scan_matrix[scan_idx];
 
-            uint8_t data[2];
-            data[0] = 0xfe;
-            data[1] = 0xFE;
+                esp_err_t ret = i2c_master_transmit(dev_handle, &data, 1, 50);
+                if (ret == ESP_OK) {
+                    //ESP_LOGI(TAG, "Write OK");
+                } else if (ret == ESP_ERR_TIMEOUT) {
+                    ESP_LOGW(TAG, "Bus is busy");
+                } else {
+                    ESP_LOGW(TAG, "Write Failed");
+                }
 
-            esp_err_t ret = i2c_master_transmit(dev_handle, data, 1, 50);
-            if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "Write OK");
-            } else if (ret == ESP_ERR_TIMEOUT) {
-                ESP_LOGW(TAG, "Bus is busy");
-            } else {
-                ESP_LOGW(TAG, "Write Failed");
+                ret = i2c_master_receive(dev_handle, &data, 1, 50);
+                if (ret == ESP_OK) {
+                    //ESP_LOGI(TAG, "Read: 0x%x", data);
+                    scan_result[scan_idx] = data;
+                } else if (ret == ESP_ERR_TIMEOUT) {
+                    ESP_LOGW(TAG, "Bus is busy");
+                } else {
+                    ESP_LOGW(TAG, "Read failed");
+                }
             }
 
-            ret = i2c_master_receive(dev_handle, data, 1, 50);
-            if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "Read: 0x%x", data[0]);
-            } else if (ret == ESP_ERR_TIMEOUT) {
-                ESP_LOGW(TAG, "Bus is busy");
-            } else {
-                ESP_LOGW(TAG, "Read failed");
+            //ESP_LOGI(TAG, "Keyboard: 0x%.2x 0x%.2x 0x%.2x", scan_result[0], scan_result[1], scan_result[2]);
+
+            // right
+            if (scan_result[1] == 0xed)
+            {
+                if (pushed[1] != 0xed)
+                {
+                    pb += 5;
+                    if (pb > 100) pb = 100;
+                    UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
+                    // Set duty to 50%
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
+                    // Update duty to apply the new value
+                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                    snprintf(buffer, sizeof(buffer), "%d", pb);
+                    UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
+
+                    ESP_LOGI(TAG, "Duty set to %d", pb);
+                    pushed[1] = scan_result[1];
+                }
+            }
+            // left
+            else if (scan_result[1] == 0xdd)
+            {
+                if (pushed[1] != 0xdd)
+                {
+                    if (pb >= 5) pb -= 5;
+                    UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
+                    // Set duty to 50%
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
+                    // Update duty to apply the new value
+                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                    snprintf(buffer, sizeof(buffer), "%d", pb);
+                    UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
+
+                    ESP_LOGI(TAG, "Duty set to %d", pb);
+                    pushed[1] = scan_result[1];
+                }
+            }
+            else
+            {
+                pushed[1] = scan_result[1];
             }
         }
 
@@ -645,7 +692,7 @@ void app_main()
     example_ledc_init();
 
     // Set duty to 50%
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*99)));
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*50)));
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
