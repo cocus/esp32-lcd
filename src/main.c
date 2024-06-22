@@ -15,6 +15,9 @@
 
 #include "ugui.h"
 
+#include "driver/i2c_master.h"
+
+
 #define TAG "main"
 
 #ifdef DOUBLE_BUFFERED
@@ -79,17 +82,17 @@ void lcd_config()
 
     i2s_parallel_config_t cfg = {
         .gpio_bus = {
-            {.gpio = 16, .inverted = 0, .initial_value = 0}, // 0 : d0
+            {.gpio = 19, .inverted = 0, .initial_value = 0}, // 0 : d0
             {.gpio = 4, .inverted = 0, .initial_value = 0},  // 1 : d1
             {.gpio = 2, .inverted = 0, .initial_value = 0},  // 2 : d2
             {.gpio = 15, .inverted = 0, .initial_value = 0}, // 3 : d3
-            {.gpio = 18, .inverted = 0, .initial_value = 0}, // 4 : HS
-            {.gpio = 19, .inverted = 0, .initial_value = 0}, // 5 : VS
+            {.gpio = 17, .inverted = 0, .initial_value = 0}, // 4 : HS
+            {.gpio = 16, .inverted = 0, .initial_value = 0}, // 5 : VS
             {.gpio = -1, .inverted = 0, .initial_value = 0}, // 6 : CLK_EN gate
-            {.gpio = -1, .inverted = 0, .initial_value = 0}, // 7 : unused
+           // {.gpio = -1, .inverted = 0, .initial_value = 0}, // 7 : unused
         },
         .num_gpio = 6,
-        .gpio_clk = 17, // XCK
+        .gpio_clk = 5, // XCK
 
         .bits = I2S_PARALLEL_BITS_8,
         .clkspeed_hz = 2 * 1000 * 1500, // resulting pixel clock = 1.5MHz (~42fps)
@@ -350,16 +353,25 @@ void esp32_lcd_thing_flush(void)
 
 #define LEDC_TIMER              LEDC_TIMER_0
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO          (21) // Define the output GPIO
+#define LEDC_OUTPUT_IO          (23) // Define the output GPIO
 #define LEDC_CHANNEL            LEDC_CHANNEL_0
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 #define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
 #define LEDC_FREQUENCY          (480) // Frequency in Hertz. Set frequency at 
 
 
+
+i2c_master_bus_handle_t tool_bus_handle;
+
+
+
+
 void lcdTask(void *pvParameters)
 {
     lcd_config();
+
+    gpio_set_direction(18, GPIO_MODE_OUTPUT);
+    gpio_set_level(18, 1); // ENABLE
 
     // CNFGClearScreen(0);
     i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
@@ -371,6 +383,16 @@ void lcdTask(void *pvParameters)
     device.flush = &esp32_lcd_thing_flush;
 
     GUI_Setup(&device);
+
+
+    i2c_device_config_t i2c_dev_conf = {
+        .scl_speed_hz = 100 * 1000,
+        .device_address = 0x20,
+    };
+    i2c_master_dev_handle_t dev_handle;
+    if (i2c_master_bus_add_device(tool_bus_handle, &i2c_dev_conf, &dev_handle) != ESP_OK) {
+        return;
+    }
 
     uint8_t pb = 0;
     cct_SetMarker();
@@ -395,9 +417,31 @@ void lcdTask(void *pvParameters)
             // Update duty to apply the new value
             //ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
+
+            int data_addr = 0;
+
+            uint8_t data[2];
+            data[0] = 0xfe;
+            data[1] = 0xFE;
+
+            esp_err_t ret = i2c_master_transmit(dev_handle, data, 1, 50);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "Write OK");
+            } else if (ret == ESP_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Bus is busy");
+            } else {
+                ESP_LOGW(TAG, "Write Failed");
+            }
+
+            ret = i2c_master_receive(dev_handle, data, 1, 50);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "Read: 0x%x", data[0]);
+            } else if (ret == ESP_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Bus is busy");
+            } else {
+                ESP_LOGW(TAG, "Read failed");
+            }
         }
-
-
 
         GUI_Process();
     }
@@ -552,6 +596,10 @@ static void example_ledc_init(void)
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
+static gpio_num_t i2c_gpio_sda = 25;
+static gpio_num_t i2c_gpio_scl = 26;
+
+static i2c_port_t i2c_port = I2C_NUM_0;
 
 
 void app_main()
@@ -561,6 +609,38 @@ void app_main()
     // pinMode(PIN_BIAS_EN, OUTPUT);
     // digitalWrite(PIN_BIAS_EN, 0);
     // pinMode(PIN_BTN, INPUT_PULLUP);
+
+    i2c_master_bus_config_t i2c_bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = i2c_port,
+        .scl_io_num = i2c_gpio_scl,
+        .sda_io_num = i2c_gpio_sda,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+
+    i2c_new_master_bus(&i2c_bus_config, &tool_bus_handle);
+
+
+    uint8_t address;
+    printf("     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\r\n");
+    for (int i = 0; i < 128; i += 16) {
+        printf("%02x: ", i);
+        for (int j = 0; j < 16; j++) {
+            fflush(stdout);
+            address = i + j;
+            esp_err_t ret = i2c_master_probe(tool_bus_handle, address, 50);
+            if (ret == ESP_OK) {
+                printf("%02x ", address);
+            } else if (ret == ESP_ERR_TIMEOUT) {
+                printf("UU ");
+            } else {
+                printf("-- ");
+            }
+        }
+        printf("\r\n");
+    }
+
 
     example_ledc_init();
 
