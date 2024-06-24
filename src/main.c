@@ -148,7 +148,7 @@ UG_PROGRESS pgb0;
 UG_PROGRESS pgb1;
 UG_OBJECT objs[MAX_OBJS];
 
-#define INITIAL_MARGIN 120
+#define INITIAL_MARGIN 3
 #define BTN_WIDTH 100
 #define BTN_HEIGHT 30
 #define CHB_WIDTH 100
@@ -218,8 +218,9 @@ void GUI_Setup(UG_DEVICE *device)
 
     // Setup Window
     UG_WindowCreate(&wnd, objs, MAX_OBJS, &windowHandler);
+    wnd.xs = 120;
     UG_WindowSetTitleTextFont(&wnd, FONT_6X8);
-    UG_WindowSetTitleText(&wnd, "App Title mas largo la concha de estos pelotudos que cortaron la LCD");
+    UG_WindowSetTitleText(&wnd, "App Title");
 
     // Buttons
     UG_ButtonCreate(&wnd, &btn0, BTN_ID_0, UGUI_POS(INITIAL_MARGIN, OBJ_Y(0), BTN_WIDTH, BTN_HEIGHT));
@@ -309,7 +310,7 @@ void GUI_Setup(UG_DEVICE *device)
 
     // Progress Bar
     UG_ProgressCreate(&wnd, &pgb0, PGB_ID_0, UGUI_POS(INITIAL_MARGIN, OBJ_Y(4) + 20, 157, 20));
-    UG_ProgressSetProgress(&wnd, PGB_ID_0, 0);
+    UG_ProgressSetProgress(&wnd, PGB_ID_0, 50);
 
     UG_ProgressCreate(&wnd, &pgb1, PGB_ID_1, UGUI_POS(159 + INITIAL_MARGIN * 2, OBJ_Y(4) + 25, 156, 10));
     UG_ProgressSetStyle(&wnd, PGB_ID_1, PGB_STYLE_2D | PGB_STYLE_FORE_COLOR_MESH);
@@ -396,7 +397,7 @@ void lcdTask(void *pvParameters)
 
     uint8_t scan_matrix[] = { 0xfe, 0xfd, 0xfb };
     uint8_t pushed[3] = { 0xfe, 0xfd, 0xfb };
-    uint8_t pb = 0;
+    uint8_t pb = 50;
     char buffer[10] = { '\0' };
     cct_SetMarker();
 
