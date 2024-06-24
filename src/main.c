@@ -362,7 +362,6 @@ void esp32_lcd_thing_flush(void)
 
 
 
-i2c_master_bus_handle_t tool_bus_handle;
 
 
 
@@ -384,112 +383,12 @@ void lcdTask(void *pvParameters)
     device.flush = &esp32_lcd_thing_flush;
 
     GUI_Setup(&device);
-
-
-    i2c_device_config_t i2c_dev_conf = {
-        .scl_speed_hz = 100 * 1000,
-        .device_address = 0x20,
-    };
-    i2c_master_dev_handle_t dev_handle;
-    if (i2c_master_bus_add_device(tool_bus_handle, &i2c_dev_conf, &dev_handle) != ESP_OK) {
-        return;
-    }
-
-    uint8_t scan_matrix[] = { 0xfe, 0xfd, 0xfb };
-    uint8_t pushed[3] = { 0xfe, 0xfd, 0xfb };
-    uint8_t pb = 50;
-    char buffer[10] = { '\0' };
     cct_SetMarker();
 
     while (1)
     {
         /* Delay 1 tick (assumes FreeRTOS tick is 10ms */
         vTaskDelay(pdMS_TO_TICKS(10));
-
-        uint32_t elapsedUs = cct_ElapsedTimeUs();
-        if (elapsedUs >= 10000)
-        {
-            cct_SetMarker();
-
-            // Set duty to 50%
-            //ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
-            // Update duty to apply the new value
-            //ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-
-            // col0: 0xee, 0xde, 0xbe
-            // col1: 0xbd, 0xed, 0xdd, 0xf5
-            // col2: 0xf3, 0xeb, 0xdb, 0xbb
-
-            uint8_t scan_result[3] = { 0, 0, 0 };
-            for (int scan_idx = 0; scan_idx < 3; scan_idx++)
-            {
-                uint8_t data;
-                data = scan_matrix[scan_idx];
-
-                esp_err_t ret = i2c_master_transmit(dev_handle, &data, 1, 50);
-                if (ret == ESP_OK) {
-                    //ESP_LOGI(TAG, "Write OK");
-                } else if (ret == ESP_ERR_TIMEOUT) {
-                    ESP_LOGW(TAG, "Bus is busy");
-                } else {
-                    ESP_LOGW(TAG, "Write Failed");
-                }
-
-                ret = i2c_master_receive(dev_handle, &data, 1, 50);
-                if (ret == ESP_OK) {
-                    //ESP_LOGI(TAG, "Read: 0x%x", data);
-                    scan_result[scan_idx] = data;
-                } else if (ret == ESP_ERR_TIMEOUT) {
-                    ESP_LOGW(TAG, "Bus is busy");
-                } else {
-                    ESP_LOGW(TAG, "Read failed");
-                }
-            }
-
-            //ESP_LOGI(TAG, "Keyboard: 0x%.2x 0x%.2x 0x%.2x", scan_result[0], scan_result[1], scan_result[2]);
-
-            // right
-            if (scan_result[1] == 0xed)
-            {
-                if (pushed[1] != 0xed)
-                {
-                    pb += 5;
-                    if (pb > 100) pb = 100;
-                    UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
-                    // Set duty to 50%
-                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
-                    // Update duty to apply the new value
-                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-                    snprintf(buffer, sizeof(buffer), "%d", pb);
-                    UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
-
-                    ESP_LOGI(TAG, "Duty set to %d", pb);
-                    pushed[1] = scan_result[1];
-                }
-            }
-            // left
-            else if (scan_result[1] == 0xdd)
-            {
-                if (pushed[1] != 0xdd)
-                {
-                    if (pb >= 5) pb -= 5;
-                    UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
-                    // Set duty to 50%
-                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
-                    // Update duty to apply the new value
-                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-                    snprintf(buffer, sizeof(buffer), "%d", pb);
-                    UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
-
-                    ESP_LOGI(TAG, "Duty set to %d", pb);
-                    pushed[1] = scan_result[1];
-                }
-            }
-            else
-            {
-                pushed[1] = scan_result[1];
-            }
-        }
 
         GUI_Process();
     }
@@ -613,6 +512,121 @@ void lcdTask(void *pvParameters)
 }
 
 
+
+
+void keyboardTask(void*)
+{
+    const gpio_num_t i2c_gpio_sda = 25;
+    const gpio_num_t i2c_gpio_scl = 26;
+    const i2c_port_t i2c_port = I2C_NUM_0;
+
+    /* register the I2C bus */
+    i2c_master_bus_config_t i2c_bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = i2c_port,
+        .scl_io_num = i2c_gpio_scl,
+        .sda_io_num = i2c_gpio_sda,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t i2c_kb_bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &i2c_kb_bus_handle));
+
+    /* register the PCF8574 device on the previously registered I2C bus */
+    i2c_device_config_t i2c_dev_conf = {
+        .scl_speed_hz = 100 * 1000,
+        .device_address = 0x20,
+    };
+    i2c_master_dev_handle_t pcf8574_dev_handle;
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_kb_bus_handle, &i2c_dev_conf, &pcf8574_dev_handle));
+
+    uint8_t scan_matrix[] = { 0xfe, 0xfd, 0xfb };
+    uint8_t pushed[3] = { 0xfe, 0xfd, 0xfb };
+    char buffer[10] = { '\0' };
+    uint8_t pb = 50;
+
+    while (1)
+    {
+        // col0: 0xee, 0xde, 0xbe
+        // col1: 0xbd, 0xed, 0xdd, 0xf5
+        // col2: 0xf3, 0xeb, 0xdb, 0xbb
+
+        uint8_t scan_result[3] = { 0, 0, 0 };
+        for (int scan_idx = 0; scan_idx < 3; scan_idx++)
+        {
+            uint8_t data;
+            data = scan_matrix[scan_idx];
+
+            esp_err_t ret = i2c_master_transmit(pcf8574_dev_handle, &data, 1, 50);
+            if (ret == ESP_OK) {
+                //ESP_LOGI(TAG, "Write OK");
+            } else if (ret == ESP_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Bus is busy");
+            } else {
+                ESP_LOGW(TAG, "Write Failed");
+            }
+
+            ret = i2c_master_receive(pcf8574_dev_handle, &data, 1, 50);
+            if (ret == ESP_OK) {
+                //ESP_LOGI(TAG, "Read: 0x%x", data);
+                scan_result[scan_idx] = data;
+            } else if (ret == ESP_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Bus is busy");
+            } else {
+                ESP_LOGW(TAG, "Read failed");
+            }
+        }
+
+        //ESP_LOGI(TAG, "Keyboard: 0x%.2x 0x%.2x 0x%.2x", scan_result[0], scan_result[1], scan_result[2]);
+
+        // right
+        if (scan_result[1] == 0xed)
+        {
+            if (pushed[1] != 0xed)
+            {
+                pb += 5;
+                if (pb > 100) pb = 100;
+                UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
+                // Set duty to 50%
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
+                // Update duty to apply the new value
+                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                snprintf(buffer, sizeof(buffer), "%d", pb);
+                UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
+
+                ESP_LOGI(TAG, "Duty set to %d", pb);
+                pushed[1] = scan_result[1];
+            }
+        }
+        // left
+        else if (scan_result[1] == 0xdd)
+        {
+            if (pushed[1] != 0xdd)
+            {
+                if (pb >= 5) pb -= 5;
+                UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
+                // Set duty to 50%
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
+                // Update duty to apply the new value
+                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                snprintf(buffer, sizeof(buffer), "%d", pb);
+                UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
+
+                ESP_LOGI(TAG, "Duty set to %d", pb);
+                pushed[1] = scan_result[1];
+            }
+        }
+        else
+        {
+            pushed[1] = scan_result[1];
+        }
+        /* delay for keyboard scan rate */
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+
+
 /* Warning:
  * For ESP32, ESP32S2, ESP32S3, ESP32C3, ESP32C2, ESP32C6, ESP32H2, ESP32P4 targets,
  * when LEDC_DUTY_RES selects the maximum duty resolution (i.e. value equal to SOC_LEDC_TIMER_BIT_WIDTH),
@@ -644,10 +658,6 @@ static void example_ledc_init(void)
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-static gpio_num_t i2c_gpio_sda = 25;
-static gpio_num_t i2c_gpio_scl = 26;
-
-static i2c_port_t i2c_port = I2C_NUM_0;
 
 
 void app_main()
@@ -658,36 +668,6 @@ void app_main()
     // digitalWrite(PIN_BIAS_EN, 0);
     // pinMode(PIN_BTN, INPUT_PULLUP);
 
-    i2c_master_bus_config_t i2c_bus_config = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .i2c_port = i2c_port,
-        .scl_io_num = i2c_gpio_scl,
-        .sda_io_num = i2c_gpio_sda,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-
-    i2c_new_master_bus(&i2c_bus_config, &tool_bus_handle);
-
-
-    uint8_t address;
-    printf("     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\r\n");
-    for (int i = 0; i < 128; i += 16) {
-        printf("%02x: ", i);
-        for (int j = 0; j < 16; j++) {
-            fflush(stdout);
-            address = i + j;
-            esp_err_t ret = i2c_master_probe(tool_bus_handle, address, 50);
-            if (ret == ESP_OK) {
-                printf("%02x ", address);
-            } else if (ret == ESP_ERR_TIMEOUT) {
-                printf("UU ");
-            } else {
-                printf("-- ");
-            }
-        }
-        printf("\r\n");
-    }
 
 
     example_ledc_init();
@@ -696,6 +676,8 @@ void app_main()
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*50)));
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+
+    xTaskCreatePinnedToCore(&keyboardTask, "kb", 4096, NULL, 20, NULL, 1);
 
     xTaskCreatePinnedToCore(&lcdTask, "lcdTask", 4096, NULL, 20, NULL, 1);
 }
