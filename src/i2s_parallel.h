@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "soc/i2s_struct.h"
-#include "config.h"
 
 typedef enum
 {

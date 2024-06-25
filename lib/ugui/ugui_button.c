@@ -545,6 +545,10 @@ static void _UG_ButtonUpdate(UG_WINDOW* wnd, UG_OBJECT* obj)
              if ( btn->style & BTN_STYLE_3D )
              {  /* 3D */
                 _UG_DrawObjectFrame(obj->a_abs.xs,obj->a_abs.ys,obj->a_abs.xe,obj->a_abs.ye, (btn->state&BTN_STATE_PRESSED)?(UG_COLOR*)pal_button_pressed:(UG_COLOR*)pal_button_released);
+                if ( obj->state & OBJ_STATE_FOCUS )
+                {
+                  UG_DrawDottedFrame(obj->a_abs.xs + 2, obj->a_abs.ys + 2, obj->a_abs.xe - 4, obj->a_abs.ye -4, 2, C_BLACK);
+                }
              }
              else
              {  /* 2D */

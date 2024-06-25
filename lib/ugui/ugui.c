@@ -76,6 +76,7 @@ UG_S16 UG_Init( UG_GUI* g, UG_DEVICE *device )
    g->next_window = NULL;
    g->active_window = NULL;
    g->last_window = NULL;
+   g->focused = NULL;
 
    /* Clear drivers */
    for(i=0;i<NUMBER_OF_DRIVERS;i++)
@@ -206,6 +207,47 @@ void UG_DrawFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_COLOR c )
    UG_DrawLine(x1,y2,x2,y2,c);
    UG_DrawLine(x1,y1,x1,y2,c);
    UG_DrawLine(x2,y1,x2,y2,c);
+}
+
+void drawDottedLine(int x0, int y0, int x1, int y1, int dotLength, int spaceLength, UG_COLOR c) {
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx - dy;
+    int dotCount = 0;
+    int drawDot = 1;
+
+    while (1) {
+        if (drawDot) {
+            gui->device->pset(x0, y0, c);
+        }
+        dotCount++;
+
+        if (dotCount == dotLength) {
+            dotCount = 0;
+            drawDot = !drawDot;
+        }
+
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x0 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+void UG_DrawDottedFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_U16 spacing, UG_COLOR c )
+{
+   drawDottedLine(x1,y1,x2,y1,spacing,1,c);
+   drawDottedLine(x1,y2,x2,y2,spacing,1,c);
+   drawDottedLine(x1,y1,x1,y2,spacing,1,c);
+   drawDottedLine(x2,y1,x2,y2,spacing,1,c);
 }
 
 void UG_DrawRoundFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_S16 r, UG_COLOR c )
@@ -2479,4 +2521,26 @@ static UG_RESULT _UG_WindowClear( UG_WINDOW* wnd )
       return UG_RESULT_OK;
    }
    return UG_RESULT_FAIL;
+}
+
+UG_RESULT UG_SetFocus( UG_OBJECT* object )
+{
+   UG_OBJECT* focused_old = gui->focused;
+
+   if (focused_old)
+   {
+      /* force a redraw on the previously focused object */
+      focused_old->state |= OBJ_STATE_UPDATE | OBJ_STATE_REDRAW;
+      focused_old->state &= ~OBJ_STATE_FOCUS;
+   }
+
+   if (object)
+   {
+      /* force a redraw on the newly focused object */
+      object->state |= OBJ_STATE_UPDATE | OBJ_STATE_REDRAW | OBJ_STATE_FOCUS;
+   }
+
+   gui->focused = object;
+
+   return UG_RESULT_OK;
 }

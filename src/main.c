@@ -1,130 +1,184 @@
 #include "esp_system.h"
 #include "esp_app_desc.h"
-
-#include "common.h"
-#include "config.h"
-#include "i2s_parallel.h"
-#include "gfx3d.h"
-#include "cct.h"
-
-#include "driver/ledc.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 
 
-// #include "rectbmp.h"
-// #include "lenabmp.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 #include "ugui.h"
+
+#include "i2s_parallel.h"
+#include "i2s_lcd4bit.h"
+
+#include "driver/ledc.h"
 
 #include "driver/i2c_master.h"
 
 
 #define TAG "main"
 
-#ifdef DOUBLE_BUFFERED
-int DrawBufID;
-uint8_t FrameBuffer[2][FRAME_SIZE];
-#else
-uint8_t FrameBuffer[FRAME_SIZE];
-#endif
-
-#if 0
-// from https://github.com/cnlohr/channel3
-void SetupMatrix()
+typedef enum
 {
-    tdIdentity(ProjectionMatrix);
-    tdIdentity(ModelviewMatrix);
-    Perspective(600, 250, 50, 8192, ProjectionMatrix);
-}
+    BTN_HELP = 1,
+    BTN_BACKLIGHT = 2,
+    BTN_UP = 3,
+    BTN_DOWN = 4,
+    BTN_RIGHT = 5,
+    BTN_LEFT = 6,
+    BTN_5 = 7,
+    BTN_4 = 8,
+    BTN_3 = 9,
+    BTN_2 = 10,
+    BTN_1 = 11,
+} kb_btn_t;
 
-// from https://github.com/cnlohr/channel3
-void DrawSphere(int frameIndex)
+static struct
 {
-    CNFGPenX = 0;
-    CNFGPenY = 0;
-    CNFGClearScreen(0);
-    CNFGColor(1);
-    tdIdentity(ModelviewMatrix);
-    tdIdentity(ProjectionMatrix);
-    int x = 0;
-    int y = 0;
-    CNFGDrawText("Matrix-based 3D engine", 3);
-    SetupMatrix();
-    tdRotateEA(ProjectionMatrix, -20, 0, 0);
-    tdRotateEA(ModelviewMatrix, frameIndex, 0, 0);
-    int sphereset = (frameIndex / 120);
-    if (sphereset > 2)
-        sphereset = 2;
-    for (y = -sphereset; y <= sphereset; y++)
+    uint8_t bit_col_select;
+    uint8_t bit_row;
+    kb_btn_t btn;
+    const char *friendly_name;
+    bool state;
+    int64_t last_ev_timestamp;
+} _kb[] = {
+    // col0: 0xee,     0xde,     0xbe
+    // col0: help,     backlig,  up
+    // col0: 11101110, 11011110, 10111110
+    // sel0: 11111110, 11111110, 11111110
+
+    // col1: 0xbd,     0xed,     0xdd,     0xf5
+    // col1: down,     right,    left,     btn5
+    // col1: 10111101, 11101101, 11011101, 11110101
+    // sel1: 11111101, 11111101, 11111101, 11111101
+
+    // col2: 0xf3,     0xeb,     0xdb,     0xbb
+    // col2: btn4,     btn3,     btn2,     btn1
+    // col2: 11110011, 11101011, 11011011, 10111011
+    // sel2: 11111011, 11111011, 11111011, 11111011
+    {0, 4, BTN_HELP, "HELP", false, 0},
+    {0, 5, BTN_BACKLIGHT, "BACKLIGHT", false, 0},
+    {0, 6, BTN_UP, "UP", false, 0},
+    {1, 3, BTN_5, "5", false, 0},
+    {1, 4, BTN_RIGHT, "RIGHT", false, 0},
+    {1, 5, BTN_LEFT, "LEFT", false, 0},
+    {1, 6, BTN_DOWN, "DOWN", false, 0},
+    {2, 3, BTN_4, "4", false, 0},
+    {2, 4, BTN_3, "3", false, 0},
+    {2, 5, BTN_2, "2", false, 0},
+    {2, 6, BTN_1, "1", false, 0}};
+
+typedef struct
+{
+    kb_btn_t btn;
+    bool pressed;
+    int64_t timestamp;
+} kb_event_t;
+
+static QueueHandle_t _kb_queue = NULL;
+
+static i2c_master_dev_handle_t _pcf8574_dev_handle;
+
+void keyboardTask(void *)
+{
+    while (1)
     {
-        for (x = -sphereset; x <= sphereset; x++)
+        uint8_t scan_result[3] = {0xff, 0xff, 0xff};
+        uint8_t data;
+
+        for (size_t scan_idx = 0; scan_idx < sizeof(scan_result) / sizeof(scan_result[0]); scan_idx++)
         {
-            if (y == 2)
+            data = ~(1 << scan_idx);
+
+            esp_err_t ret = i2c_master_transmit(_pcf8574_dev_handle, &data, 1, 50);
+            if (ret == ESP_ERR_TIMEOUT)
+            {
+                ESP_LOGW(TAG, "Write: Bus is busy");
                 continue;
-            ModelviewMatrix[11] = 1000 + tdSIN((x + y) * 40 + frameIndex * 2);
-            ModelviewMatrix[3] = 500 * x;
-            ModelviewMatrix[7] = 500 * y + 800;
-            DrawGeoSphere();
+            }
+            else if (ret != ESP_OK)
+            {
+                ESP_LOGW(TAG, "Write: Failed");
+                continue;
+            }
+
+            ret = i2c_master_receive(_pcf8574_dev_handle, &scan_result[scan_idx], 1, 50);
+            if (ret == ESP_ERR_TIMEOUT)
+            {
+                ESP_LOGW(TAG, "Read: Bus is busy");
+                continue;
+            }
+            else if (ret != ESP_OK)
+            {
+                ESP_LOGW(TAG, "Read: Failed");
+                continue;
+            }
         }
+
+        for (size_t kb_idx = 0; kb_idx < sizeof(_kb) / sizeof(_kb[0]); kb_idx++)
+        {
+            uint8_t match_mask = 1 << _kb[kb_idx].bit_row;
+            bool new_state = (match_mask & scan_result[_kb[kb_idx].bit_col_select]) == 0;
+
+            if (_kb[kb_idx].state != new_state)
+            {
+                kb_event_t ev;
+                ev.btn = _kb[kb_idx].btn;
+                ev.pressed = new_state;
+                ev.timestamp = esp_timer_get_time();
+                _kb[kb_idx].last_ev_timestamp = ev.timestamp;
+                _kb[kb_idx].state = new_state;
+                xQueueSend(_kb_queue, (void *)&ev, (TickType_t)0);
+            }
+        }
+
+        /* delay for keyboard scan rate */
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
-#endif
-void lcd_config()
+
+esp_err_t keyboardInit(void)
 {
-#ifdef DOUBLE_BUFFERED
-    i2s_parallel_buffer_desc_t bufdesc[2] = {
-        {.memory = &FrameBuffer[0], .size = sizeof(FrameBuffer[0])},
-        {.memory = &FrameBuffer[1], .size = sizeof(FrameBuffer[1])},
+    const gpio_num_t i2c_gpio_sda = 25;
+    const gpio_num_t i2c_gpio_scl = 26;
+    const i2c_port_t i2c_port = I2C_NUM_0;
+
+    /* register the I2C bus */
+    i2c_master_bus_config_t i2c_bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = i2c_port,
+        .scl_io_num = i2c_gpio_scl,
+        .sda_io_num = i2c_gpio_sda,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
-#else
-    i2s_parallel_buffer_desc_t bufdesc = {
-        .memory = &FrameBuffer, .size = sizeof(FrameBuffer)};
-#endif
+    i2c_master_bus_handle_t i2c_kb_bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &i2c_kb_bus_handle));
 
-    i2s_parallel_config_t cfg = {
-        .gpio_bus = {
-            {.gpio = 19, .inverted = 0, .initial_value = 0}, // 0 : d0
-            {.gpio = 4, .inverted = 0, .initial_value = 0},  // 1 : d1
-            {.gpio = 2, .inverted = 0, .initial_value = 0},  // 2 : d2
-            {.gpio = 15, .inverted = 0, .initial_value = 0}, // 3 : d3
-            {.gpio = 17, .inverted = 0, .initial_value = 0}, // 4 : HS
-            {.gpio = 16, .inverted = 0, .initial_value = 0}, // 5 : VS
-            {.gpio = -1, .inverted = 0, .initial_value = 0}, // 6 : CLK_EN gate
-           // {.gpio = -1, .inverted = 0, .initial_value = 0}, // 7 : unused
-        },
-        .num_gpio = 6,
-        .gpio_clk = 5, // XCK
-
-        .bits = I2S_PARALLEL_BITS_8,
-        .clkspeed_hz = 2 * 1000 * 1500, // resulting pixel clock = 1.5MHz (~42fps)
-
-#ifdef DOUBLE_BUFFERED
-        .bufa = &bufdesc[0],
-        .bufb = &bufdesc[1]
-#else
-        .buf = &bufdesc
-#endif
+    /* register the PCF8574 device on the previously registered I2C bus */
+    i2c_device_config_t i2c_dev_conf = {
+        .scl_speed_hz = 100 * 1000,
+        .device_address = 0x20,
     };
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_kb_bus_handle, &i2c_dev_conf, &_pcf8574_dev_handle));
 
-#ifdef DOUBLE_BUFFERED
-    // make sure both front and back buffers have encoded syncs
-    DrawBufID = 0;
-    CNFGClearScreen(0);
-    DrawBufID = 1;
-#endif
-    // make sure buffer has encoded syncs
-    CNFGClearScreen(0);
+    _kb_queue = xQueueCreate(50, sizeof(kb_event_t));
 
-    // this lcd power up sequence must be followed to avoid damage
-    delayMs(50); // allow supply voltage to stabilize
-    i2s_parallel_setup(&I2S1, &cfg);
-    delayMs(50);
-    // digitalWrite(PIN_BIAS_EN, 1); // enable lcd bias voltage V0 after clocks are available
-    delayMs(50);
-    // digitalWrite(PIN_DPY_EN, 1); // enable lcd
+    xTaskCreatePinnedToCore(&keyboardTask, "kb", 4096, NULL, 20, NULL, 1);
+
+    return ESP_OK;
 }
 
-#define WIDTH NUM_COLS
-#define HEIGHT NUM_ROWS
+#define LEDC_TIMER LEDC_TIMER_0
+#define LEDC_MODE LEDC_LOW_SPEED_MODE
+#define LEDC_OUTPUT_IO (23) // Define the output GPIO
+#define LEDC_CHANNEL LEDC_CHANNEL_0
+#define LEDC_DUTY_RES LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY (4096)                // Set duty to 50%. (2 ** 13) * 50% = 4096
+#define LEDC_FREQUENCY (505)            // Frequency in Hertz. Set frequency at
+
+
 #define MAX_OBJS 15
 
 // Global Vars
@@ -211,11 +265,6 @@ char buffer[64] = {'\0'};
 
 void GUI_Setup(UG_DEVICE *device)
 {
-    // Setup UGUI
-    UG_Init(&ugui, device);
-
-    UG_FillScreen(C_WHITE);
-
     // Setup Window
     UG_WindowCreate(&wnd, objs, MAX_OBJS, &windowHandler);
     wnd.xs = 120;
@@ -227,6 +276,9 @@ void GUI_Setup(UG_DEVICE *device)
     UG_ButtonSetFont(&wnd, BTN_ID_0, FONT_6X8);
     UG_ButtonSetText(&wnd, BTN_ID_0, "Btn 3D");
     UG_ButtonSetStyle(&wnd, BTN_ID_0, BTN_STYLE_3D);
+
+    UG_OBJECT *obj = _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_0);
+    UG_SetFocus(obj);
 
     UG_ButtonCreate(&wnd, &btn1, BTN_ID_1, UGUI_POS(INITIAL_MARGIN, OBJ_Y(1), BTN_WIDTH, BTN_HEIGHT));
     UG_ButtonSetFont(&wnd, BTN_ID_1, FONT_6X8);
@@ -327,21 +379,14 @@ void GUI_Process()
 // Internal
 void esp32_lcd_thing_pset(UG_S16 x, UG_S16 y, UG_COLOR c)
 {
-#ifdef DOUBLE_BUFFERED
-    uint8_t *pPkt = FrameBuffer[DrawBufID];
-#else
-    uint8_t *pPkt = FrameBuffer;
-#endif
-    uint32_t pos = (164 * (y + 1)) + 1 + (x >> 2);
-    uint8_t pixel = x % 4;
-    static const uint8_t pixel_masks[4] = {7, 0xb, 0xd, 0xe};
-    static const uint8_t pixel_values[4] = {8, 4, 2, 1};
-    uint8_t curr = pPkt[ESP32_CRAP_ALIGN(pos)] & pixel_masks[pixel];
     if (c != C_WHITE)
     {
-        curr |= pixel_values[pixel];
+        LCD_PixelSet(x, y, true);
     }
-    pPkt[ESP32_CRAP_ALIGN(pos)] = curr;
+    else
+    {
+        LCD_PixelSet(x, y, false);
+    }
 }
 
 void esp32_lcd_thing_flush(void)
@@ -351,30 +396,137 @@ void esp32_lcd_thing_flush(void)
     //  DrawBufID ^= 1;
 }
 
-
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO          (23) // Define the output GPIO
-#define LEDC_CHANNEL            LEDC_CHANNEL_0
-#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
-#define LEDC_FREQUENCY          (505) // Frequency in Hertz. Set frequency at 
-
-
-
-
-
-
-
 void lcdTask(void *pvParameters)
 {
-    lcd_config();
+    kb_event_t ev;
+    char text_buffer[10] = {'\0'};
+    uint8_t pb = 50;
+
+    GUI_Setup(&device);
+
+    while (1)
+    {
+        /* Delay 10ms */
+        if (xQueueReceive(_kb_queue, (void *)&ev, pdMS_TO_TICKS(10)) != pdTRUE)
+        {
+            goto update_screen;
+        }
+
+        if (ev.pressed == false)
+        {
+            goto update_screen;
+        }
+
+        UG_OBJECT *obj = NULL;
+        switch (ev.btn)
+        {
+        case BTN_RIGHT:
+            pb += 5;
+            if (pb > 100)
+                pb = 100;
+            UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
+            // Set duty to 50%
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2 * 13 * pb)));
+            // Update duty to apply the new value
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+            snprintf(text_buffer, sizeof(text_buffer), "%d", pb);
+            UG_TextboxSetText(&wnd, TXB_ID_3, text_buffer);
+
+            ESP_LOGI(TAG, "Duty set to %d", pb);
+            break;
+
+        case BTN_LEFT:
+            if (pb >= 5)
+                pb -= 5;
+            UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
+            // Set duty to 50%
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2 * 13 * pb)));
+            // Update duty to apply the new value
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+            snprintf(text_buffer, sizeof(text_buffer), "%d", pb);
+            UG_TextboxSetText(&wnd, TXB_ID_3, text_buffer);
+
+            ESP_LOGI(TAG, "Duty set to %d", pb);
+            break;
+
+        case BTN_UP:
+            obj = _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_0);
+            ESP_LOGI(TAG, "set: up, obj %p", obj);
+            UG_SetFocus(obj);
+            break;
+
+        case BTN_DOWN:
+            obj = _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_2);
+            ESP_LOGI(TAG, "set: down, obj %p", obj);
+            UG_SetFocus(obj);
+            break;
+
+        default:
+            break;
+        };
+
+    update_screen:
+        GUI_Process();
+    }
+}
+
+esp_err_t lcdInit(void)
+{
+#ifdef DOUBLE_BUFFERED
+    i2s_parallel_buffer_desc_t bufdesc[2] = {
+        {.memory = LCD_GetFrameBuffer(0), .size = FRAME_SIZE},
+        {.memory = LCD_GetFrameBuffer(1), .size = FRAME_SIZE},
+    };
+#else
+    i2s_parallel_buffer_desc_t bufdesc = {
+        .memory = LCD_GetFrameBuffer(), .size = FRAME_SIZE};
+#endif
+
+    i2s_parallel_config_t cfg = {
+        .gpio_bus = {
+            {.gpio = 19, .inverted = 0, .initial_value = 0}, // 0 : d0
+            {.gpio = 4, .inverted = 0, .initial_value = 0},  // 1 : d1
+            {.gpio = 2, .inverted = 0, .initial_value = 0},  // 2 : d2
+            {.gpio = 15, .inverted = 0, .initial_value = 0}, // 3 : d3
+            {.gpio = 17, .inverted = 0, .initial_value = 0}, // 4 : HS
+            {.gpio = 16, .inverted = 0, .initial_value = 0}, // 5 : VS
+            {.gpio = -1, .inverted = 0, .initial_value = 0}, // 6 : CLK_EN gate
+        },
+        .num_gpio = 6,
+        .gpio_clk = 5, // XCK
+
+        .bits = I2S_PARALLEL_BITS_8,
+        .clkspeed_hz = 2 * 1000 * 1500, // resulting pixel clock = 1.5MHz (~42fps)
+
+#ifdef DOUBLE_BUFFERED
+        .bufa = &bufdesc[0],
+        .bufb = &bufdesc[1]
+#else
+        .buf = &bufdesc
+#endif
+    };
+
+#ifdef DOUBLE_BUFFERED
+    // make sure both front and back buffers have encoded syncs
+    LCD_SelectFrameBuffer(0);
+    LCD_ClearScreen(0);
+    LCD_SelectFrameBuffer(1);
+#endif
+    // make sure buffer has encoded syncs
+    LCD_ClearScreen(0);
 
     gpio_set_direction(18, GPIO_MODE_OUTPUT);
+    gpio_set_level(18, 0); // ENABLE
+
+    // this lcd power up sequence must be followed to avoid damage
+    vTaskDelay(pdMS_TO_TICKS(50)); // allow supply voltage to stabilize
+    i2s_parallel_setup(&I2S1, &cfg);
+    vTaskDelay(pdMS_TO_TICKS(50));
     gpio_set_level(18, 1); // ENABLE
 
-    // CNFGClearScreen(0);
-    i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
+#ifdef DOUBLE_BUFFERED
+    i2s_parallel_flip_to_buffer(&I2S1, LCD_GetFrameBufferSelected());
+#endif
 
     // Setup UGUI
     device.x_dim = 640;
@@ -382,250 +534,16 @@ void lcdTask(void *pvParameters)
     device.pset = &esp32_lcd_thing_pset;
     device.flush = &esp32_lcd_thing_flush;
 
-    GUI_Setup(&device);
-    cct_SetMarker();
+    // Setup UGUI
+    UG_Init(&ugui, &device);
 
-    while (1)
-    {
-        /* Delay 1 tick (assumes FreeRTOS tick is 10ms */
-        vTaskDelay(pdMS_TO_TICKS(10));
+    // clear background
+    UG_FillScreen(C_WHITE);
 
-        GUI_Process();
-    }
+    xTaskCreatePinnedToCore(&lcdTask, "lcdTask", 4096, NULL, 20, NULL, 1);
 
-#if 0
-    int counter = 0;
-    int drawState = 0;
-
-    // uint8_t *pImg = (counter / 100) & 1 ? (uint8_t *)lenaBitmap : (uint8_t *)rectBitmap;
-    // CNFGLoadBitmap(lenaBitmap);
-    // FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(163)] |= 1;
-    // FrameBuffer[DrawBufID][ESP32_CRAP_ALIGN(165)] |= 1;
-    // FrameBuffer[DrawBufID][168] |= 1;
-    // DrawBufID ^= 1;
-    // while(1) { delayMs(1000); };
-    while (1)
-    {
-
-        switch (drawState)
-        {
-        case 0:
-        default:
-            if ((counter % 100) == 0)
-            {
-                cct_SetMarker();
-
-                CNFGColor(1);
-                CNFGPenX = rand() % 12;
-                CNFGPenY = rand() % 60;
-                char sztext[10];
-                sprintf(sztext, "%02d:%02d%s", CNFGPenX, CNFGPenY, rand() & 1 ? "pm" : "am");
-                CNFGDrawText(sztext, 3 + (rand() % 8));
-                uint32_t elapsedUs = cct_ElapsedTimeUs();
-                ESP_LOGI(TAG, "vector txt : %luus", elapsedUs);
-#ifdef DOUBLE_BUFFERED
-                i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
-                DrawBufID ^= 1;
-#endif
-            }
-            if (counter > 300)
-            {
-                drawState = 1;
-                counter = -1;
-            }
-            break;
-
-        case 1:
-            if (counter == 0)
-            {
-                cct_SetMarker();
-                CNFGClearScreen(0);
-                CNFGColor(1);
-                gfx_printSz(0, 0, "Lorem ipsum dolor sit amet, consectetur");
-                gfx_printSz(8, 0, "adipiscing elit. Curabitur adipiscing ");
-                gfx_printSz(16, 0, "ante sed nibh tincidunt feugiat.Maecenas");
-                gfx_printSz(24, 0, "enim massa, fringilla sed malesuada et,");
-                gfx_printSz(32, 0, "malesuada sit amet turpis.Sed porttitor");
-                gfx_printSz(40, 0, "neque ut ante pretium vitae malesuada");
-                gfx_printSz(48, 0, "nunc bibendum. Nullam aliquet ultrices");
-                gfx_printSz(56, 0, "massa eu hendrerit. Ut sed nisi lorem.");
-                gfx_printSz(64, 0, "In vestibulum purus a tortor imperdiet");
-                gfx_printSz(72, 0, "posuere.");
-                gfx_printSz(88, 0, "Cocus Was Here :D");
-
-                gfx_printf(96, 0, "%s built on %s %s",
-                           esp_app_get_description()->project_name,
-                           esp_app_get_description()->date,
-                           esp_app_get_description()->time);
-
-                uint32_t elapsedUs = cct_ElapsedTimeUs();
-                ESP_LOGI(TAG, "bitmap txt : %luus", elapsedUs);
-#ifdef DOUBLE_BUFFERED
-                i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
-                DrawBufID ^= 1;
-#endif
-            }
-            if (counter > 250)
-            {
-                drawState = 2;
-                counter = -1;
-            }
-            break;
-
-        case 2:
-            if ((counter % 100) == 0)
-            {
-                cct_SetMarker();
-                CNFGClearScreen(0);
-                uint8_t *pImg = (counter / 100) & 1 ? (uint8_t *)lenaBitmap : (uint8_t *)rectBitmap;
-                CNFGLoadBitmap(pImg, (NUM_COLS - 240) / 2, (NUM_ROWS - 160) / 2, 240, 160);
-                uint32_t elapsedUs = cct_ElapsedTimeUs();
-                ESP_LOGI(TAG, "Load bmp : %luus", elapsedUs);
-#ifdef DOUBLE_BUFFERED
-                i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
-                DrawBufID ^= 1;
-#endif
-            }
-            if (counter == 199)
-            {
-                drawState = 3;
-                counter = -1;
-                CNFGClearScreen(0);
-            }
-            break;
-
-        case 3:
-            cct_SetMarker();
-            DrawSphere(counter % 240);
-            // uint32_t elapsedUs = cct_ElapsedTimeUs();
-            // ESP_LOGI(TAG,"Draw sph : %dus", elapsedUs);
-#ifdef DOUBLE_BUFFERED
-            i2s_parallel_flip_to_buffer(&I2S1, DrawBufID);
-            DrawBufID ^= 1;
-#endif
-            break;
-        }
-        delayMs(20);
-        counter++;
-    }
-#endif
+    return ESP_OK;
 }
-
-
-
-
-void keyboardTask(void*)
-{
-    const gpio_num_t i2c_gpio_sda = 25;
-    const gpio_num_t i2c_gpio_scl = 26;
-    const i2c_port_t i2c_port = I2C_NUM_0;
-
-    /* register the I2C bus */
-    i2c_master_bus_config_t i2c_bus_config = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .i2c_port = i2c_port,
-        .scl_io_num = i2c_gpio_scl,
-        .sda_io_num = i2c_gpio_sda,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    i2c_master_bus_handle_t i2c_kb_bus_handle;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &i2c_kb_bus_handle));
-
-    /* register the PCF8574 device on the previously registered I2C bus */
-    i2c_device_config_t i2c_dev_conf = {
-        .scl_speed_hz = 100 * 1000,
-        .device_address = 0x20,
-    };
-    i2c_master_dev_handle_t pcf8574_dev_handle;
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_kb_bus_handle, &i2c_dev_conf, &pcf8574_dev_handle));
-
-    uint8_t scan_matrix[] = { 0xfe, 0xfd, 0xfb };
-    uint8_t pushed[3] = { 0xfe, 0xfd, 0xfb };
-    char buffer[10] = { '\0' };
-    uint8_t pb = 50;
-
-    while (1)
-    {
-        // col0: 0xee, 0xde, 0xbe
-        // col1: 0xbd, 0xed, 0xdd, 0xf5
-        // col2: 0xf3, 0xeb, 0xdb, 0xbb
-
-        uint8_t scan_result[3] = { 0, 0, 0 };
-        for (int scan_idx = 0; scan_idx < 3; scan_idx++)
-        {
-            uint8_t data;
-            data = scan_matrix[scan_idx];
-
-            esp_err_t ret = i2c_master_transmit(pcf8574_dev_handle, &data, 1, 50);
-            if (ret == ESP_OK) {
-                //ESP_LOGI(TAG, "Write OK");
-            } else if (ret == ESP_ERR_TIMEOUT) {
-                ESP_LOGW(TAG, "Bus is busy");
-            } else {
-                ESP_LOGW(TAG, "Write Failed");
-            }
-
-            ret = i2c_master_receive(pcf8574_dev_handle, &data, 1, 50);
-            if (ret == ESP_OK) {
-                //ESP_LOGI(TAG, "Read: 0x%x", data);
-                scan_result[scan_idx] = data;
-            } else if (ret == ESP_ERR_TIMEOUT) {
-                ESP_LOGW(TAG, "Bus is busy");
-            } else {
-                ESP_LOGW(TAG, "Read failed");
-            }
-        }
-
-        //ESP_LOGI(TAG, "Keyboard: 0x%.2x 0x%.2x 0x%.2x", scan_result[0], scan_result[1], scan_result[2]);
-
-        // right
-        if (scan_result[1] == 0xed)
-        {
-            if (pushed[1] != 0xed)
-            {
-                pb += 5;
-                if (pb > 100) pb = 100;
-                UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
-                // Set duty to 50%
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
-                // Update duty to apply the new value
-                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-                snprintf(buffer, sizeof(buffer), "%d", pb);
-                UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
-
-                ESP_LOGI(TAG, "Duty set to %d", pb);
-                pushed[1] = scan_result[1];
-            }
-        }
-        // left
-        else if (scan_result[1] == 0xdd)
-        {
-            if (pushed[1] != 0xdd)
-            {
-                if (pb >= 5) pb -= 5;
-                UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
-                // Set duty to 50%
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*pb)));
-                // Update duty to apply the new value
-                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-                snprintf(buffer, sizeof(buffer), "%d", pb);
-                UG_TextboxSetText(&wnd, TXB_ID_3, buffer);
-
-                ESP_LOGI(TAG, "Duty set to %d", pb);
-                pushed[1] = scan_result[1];
-            }
-        }
-        else
-        {
-            pushed[1] = scan_result[1];
-        }
-        /* delay for keyboard scan rate */
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-}
-
-
 
 /* Warning:
  * For ESP32, ESP32S2, ESP32S3, ESP32C3, ESP32C2, ESP32C6, ESP32H2, ESP32P4 targets,
@@ -637,47 +555,34 @@ static void example_ledc_init(void)
 {
     // Prepare and then apply the LEDC PWM timer configuration
     ledc_timer_config_t ledc_timer = {
-        .speed_mode       = LEDC_MODE,
-        .duty_resolution  = LEDC_DUTY_RES,
-        .timer_num        = LEDC_TIMER,
-        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 4 kHz
-        .clk_cfg          = LEDC_AUTO_CLK
-    };
+        .speed_mode = LEDC_MODE,
+        .duty_resolution = LEDC_DUTY_RES,
+        .timer_num = LEDC_TIMER,
+        .freq_hz = LEDC_FREQUENCY, // Set output frequency at 4 kHz
+        .clk_cfg = LEDC_AUTO_CLK};
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
     // Prepare and then apply the LEDC PWM channel configuration
     ledc_channel_config_t ledc_channel = {
-        .speed_mode     = LEDC_MODE,
-        .channel        = LEDC_CHANNEL,
-        .timer_sel      = LEDC_TIMER,
-        .intr_type      = LEDC_INTR_DISABLE,
-        .gpio_num       = LEDC_OUTPUT_IO,
-        .duty           = 0, // Set duty to 0%
-        .hpoint         = 0
-    };
+        .speed_mode = LEDC_MODE,
+        .channel = LEDC_CHANNEL,
+        .timer_sel = LEDC_TIMER,
+        .intr_type = LEDC_INTR_DISABLE,
+        .gpio_num = LEDC_OUTPUT_IO,
+        .duty = 0, // Set duty to 0%
+        .hpoint = 0};
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-
-
 void app_main()
 {
-    // pinMode(PIN_DPY_EN, OUTPUT);
-    // digitalWrite(PIN_DPY_EN, 0);
-    // pinMode(PIN_BIAS_EN, OUTPUT);
-    // digitalWrite(PIN_BIAS_EN, 0);
-    // pinMode(PIN_BTN, INPUT_PULLUP);
-
-
-
     example_ledc_init();
 
     // Set duty to 50%
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2*13*50)));
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2 * 13 * 50)));
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
-    xTaskCreatePinnedToCore(&keyboardTask, "kb", 4096, NULL, 20, NULL, 1);
-
-    xTaskCreatePinnedToCore(&lcdTask, "lcdTask", 4096, NULL, 20, NULL, 1);
+    keyboardInit();
+    lcdInit();
 }

@@ -287,6 +287,8 @@ struct S_OBJECT
 #define OBJ_STATE_REDRAW                              (1<<6)
 #ifdef UGUI_USE_TOUCH
    #define OBJ_STATE_TOUCH_ENABLE                     (1<<7)
+#else
+   #define OBJ_STATE_FOCUS                            (1<<7)
 #endif
 #define OBJ_STATE_INIT                                (OBJ_STATE_FREE | OBJ_STATE_VALID)
 
@@ -396,6 +398,7 @@ typedef struct
    #ifdef UGUI_USE_TOUCH
    UG_TOUCH touch;
    #endif
+   UG_OBJECT* focused;
    UG_WINDOW* next_window;
    UG_WINDOW* active_window;
    UG_WINDOW* last_window;
@@ -446,6 +449,7 @@ void UG_FillFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_COLOR c );
 void UG_FillRoundFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_S16 r, UG_COLOR c );
 void UG_DrawMesh( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_U16 spacing, UG_COLOR c );
 void UG_DrawFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_COLOR c );
+void UG_DrawDottedFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_U16 spacing, UG_COLOR c );
 void UG_DrawRoundFrame( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_S16 r, UG_COLOR c );
 void UG_DrawPixel( UG_S16 x0, UG_S16 y0, UG_COLOR c );
 void UG_DrawCircle( UG_S16 x0, UG_S16 y0, UG_S16 r, UG_COLOR c );
@@ -550,5 +554,7 @@ UG_S16 UG_WindowGetInnerWidth( UG_WINDOW* wnd );
 UG_S16 UG_WindowGetOuterWidth( UG_WINDOW* wnd );
 UG_S16 UG_WindowGetInnerHeight( UG_WINDOW* wnd );
 UG_S16 UG_WindowGetOuterHeight( UG_WINDOW* wnd );
+
+UG_RESULT UG_SetFocus( UG_OBJECT* object );
 
 #endif

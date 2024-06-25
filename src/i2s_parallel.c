@@ -28,6 +28,11 @@
 #include "rom/gpio.h"
 #include "esp_heap_caps.h"
 #include "soc/gpio_periph.h"
+#include "hal/gpio_types.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "i2s_parallel"
 
@@ -161,7 +166,7 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     }
 #endif
     gpio_set_level(cfg->gpio_clk, 0); // CLK
-    delayMs(168);                     // wait for 168ms
+    vTaskDelay(pdMS_TO_TICKS(168));                     // wait for 168ms
 
     // reset sequence #2: all signals to 1
     gpio_set_level(cfg->gpio_bus[4].gpio, 1); // HS
@@ -173,7 +178,7 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     }
 #endif
     gpio_set_level(cfg->gpio_clk, 1); // CLK
-    delayMs(168);                     // wait for 168ms
+    vTaskDelay(pdMS_TO_TICKS(168));                     // wait for 168ms
 
     // reset sequence #3: all signals back to 0
     gpio_set_level(cfg->gpio_bus[4].gpio, 0); // HS
@@ -185,7 +190,7 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     }
 #endif
     gpio_set_level(cfg->gpio_clk, 0); // CLK
-    delayMs(168);                     // wait for 168ms
+    vTaskDelay(pdMS_TO_TICKS(168));                     // wait for 168ms
 
     // Power on I2S dev
     if (dev == &I2S0)
