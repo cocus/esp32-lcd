@@ -170,6 +170,8 @@ esp_err_t keyboardInit(void)
     return ESP_OK;
 }
 
+
+
 #define LEDC_TIMER LEDC_TIMER_0
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
 #define LEDC_OUTPUT_IO (23) // Define the output GPIO
@@ -177,6 +179,62 @@ esp_err_t keyboardInit(void)
 #define LEDC_DUTY_RES LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 #define LEDC_DUTY (4096)                // Set duty to 50%. (2 ** 13) * 50% = 4096
 #define LEDC_FREQUENCY (505)            // Frequency in Hertz. Set frequency at
+
+static QueueHandle_t _pwm_queue = NULL;
+
+void pwmTask(void*)
+{
+    uint8_t new_duty = 0;
+    while(1)
+    {
+        if (xQueueReceive(_pwm_queue, (void *)&new_duty, portMAX_DELAY) != pdTRUE)
+        {
+            continue;
+        }
+
+        if (new_duty > 100)
+        {
+            new_duty = 100;
+        }
+
+        // Set duty to 50%
+        ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2 * 13 * new_duty)));
+        // Update duty to apply the new value
+        ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+
+        ESP_LOGI(TAG, "Duty set to %d", new_duty);
+    }
+}
+
+esp_err_t pwmInit(void)
+{
+    // Prepare and then apply the LEDC PWM timer configuration
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode = LEDC_MODE,
+        .duty_resolution = LEDC_DUTY_RES,
+        .timer_num = LEDC_TIMER,
+        .freq_hz = LEDC_FREQUENCY, // Set output frequency at 4 kHz
+        .clk_cfg = LEDC_AUTO_CLK};
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode = LEDC_MODE,
+        .channel = LEDC_CHANNEL,
+        .timer_sel = LEDC_TIMER,
+        .intr_type = LEDC_INTR_DISABLE,
+        .gpio_num = LEDC_OUTPUT_IO,
+        .duty = 50, // Set duty to 50%
+        .hpoint = 0};
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+
+    _pwm_queue = xQueueCreate(5, sizeof(uint8_t));
+
+    xTaskCreatePinnedToCore(&pwmTask, "pwm", 2048, NULL, 20, NULL, 1);
+
+    return ESP_OK;
+}
+
 
 
 #define MAX_OBJS 15
@@ -431,8 +489,8 @@ void lcdTask(void *pvParameters)
             ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
             snprintf(text_buffer, sizeof(text_buffer), "%d", pb);
             UG_TextboxSetText(&wnd, TXB_ID_3, text_buffer);
+            xQueueSend(_pwm_queue, &pb, 0);
 
-            ESP_LOGI(TAG, "Duty set to %d", pb);
             break;
 
         case BTN_LEFT:
@@ -445,8 +503,8 @@ void lcdTask(void *pvParameters)
             ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
             snprintf(text_buffer, sizeof(text_buffer), "%d", pb);
             UG_TextboxSetText(&wnd, TXB_ID_3, text_buffer);
+            xQueueSend(_pwm_queue, &pb, 0);
 
-            ESP_LOGI(TAG, "Duty set to %d", pb);
             break;
 
         case BTN_UP:
@@ -545,44 +603,9 @@ esp_err_t lcdInit(void)
     return ESP_OK;
 }
 
-/* Warning:
- * For ESP32, ESP32S2, ESP32S3, ESP32C3, ESP32C2, ESP32C6, ESP32H2, ESP32P4 targets,
- * when LEDC_DUTY_RES selects the maximum duty resolution (i.e. value equal to SOC_LEDC_TIMER_BIT_WIDTH),
- * 100% duty cycle is not reachable (duty cannot be set to (2 ** SOC_LEDC_TIMER_BIT_WIDTH)).
- */
-
-static void example_ledc_init(void)
-{
-    // Prepare and then apply the LEDC PWM timer configuration
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode = LEDC_MODE,
-        .duty_resolution = LEDC_DUTY_RES,
-        .timer_num = LEDC_TIMER,
-        .freq_hz = LEDC_FREQUENCY, // Set output frequency at 4 kHz
-        .clk_cfg = LEDC_AUTO_CLK};
-    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
-
-    // Prepare and then apply the LEDC PWM channel configuration
-    ledc_channel_config_t ledc_channel = {
-        .speed_mode = LEDC_MODE,
-        .channel = LEDC_CHANNEL,
-        .timer_sel = LEDC_TIMER,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = LEDC_OUTPUT_IO,
-        .duty = 0, // Set duty to 0%
-        .hpoint = 0};
-    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-}
-
 void app_main()
 {
-    example_ledc_init();
-
-    // Set duty to 50%
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2 * 13 * 50)));
-    // Update duty to apply the new value
-    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-
+    pwmInit();
     keyboardInit();
     lcdInit();
 }
