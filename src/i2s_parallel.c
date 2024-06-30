@@ -38,15 +38,10 @@
 
 typedef struct
 {
-#ifdef DOUBLE_BUFFERED
     volatile lldesc_t *dmadesc_a;
     volatile lldesc_t *dmadesc_b;
     int desccount_a;
     int desccount_b;
-#else
-    volatile lldesc_t *dmadesc;
-    int desccount;
-#endif
 } i2s_parallel_state_t;
 
 static i2s_parallel_state_t i2s_state[2];
@@ -148,49 +143,17 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     }
 
     // Route the signals
-    for (size_t i = 0; i < cfg->num_gpio && i < sizeof(cfg->gpio_bus)/sizeof(cfg->gpio_bus[0]); i++)
+    for (size_t i = 0; i < sizeof(cfg->gpio_bus) / sizeof(cfg->gpio_bus[0]); i++)
     {
+        if (cfg->gpio_bus[i].gpio == -1)
+        {
+            continue;
+        }
+
         gpio_setup_out(cfg->gpio_bus[i].gpio, sig_data_base + i, cfg->gpio_bus[i].inverted);
-        gpio_set_level(cfg->gpio_bus[i].gpio, cfg->gpio_bus[i].initial_value);
     }
     gpio_setup_out(cfg->gpio_clk, sig_clk, false); // CLK
 
-    // TODO: move this out of here.
-    // reset sequence #1: all signals to 0
-    gpio_set_level(cfg->gpio_bus[4].gpio, 0); // HS
-    gpio_set_level(cfg->gpio_bus[5].gpio, 0); // VS
-#if 0
-    if (cfg->gpio_bus[6] != -1)
-    {
-        gpio_set_level(cfg->gpio_bus[6], 0); // CLK_EN
-    }
-#endif
-    gpio_set_level(cfg->gpio_clk, 0); // CLK
-    vTaskDelay(pdMS_TO_TICKS(168));                     // wait for 168ms
-
-    // reset sequence #2: all signals to 1
-    gpio_set_level(cfg->gpio_bus[4].gpio, 1); // HS
-    gpio_set_level(cfg->gpio_bus[5].gpio, 1); // VS
-#if 0
-    if (cfg->gpio_bus[6] != -1)
-    {
-        gpio_set_level(cfg->gpio_bus[6], 1); // CLK_EN
-    }
-#endif
-    gpio_set_level(cfg->gpio_clk, 1); // CLK
-    vTaskDelay(pdMS_TO_TICKS(168));                     // wait for 168ms
-
-    // reset sequence #3: all signals back to 0
-    gpio_set_level(cfg->gpio_bus[4].gpio, 0); // HS
-    gpio_set_level(cfg->gpio_bus[5].gpio, 0); // VS
-#if 0
-    if (cfg->gpio_bus[6] != -1)
-    {
-        gpio_set_level(cfg->gpio_bus[6], 0); // CLK_EN
-    }
-#endif
-    gpio_set_level(cfg->gpio_clk, 0); // CLK
-    vTaskDelay(pdMS_TO_TICKS(168));                     // wait for 168ms
 
     // Power on I2S dev
     if (dev == &I2S0)
@@ -201,6 +164,7 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
     {
         periph_module_enable(PERIPH_I2S1_MODULE);
     }
+
     // Initialize I2S dev
     dev->conf.rx_reset = 1;
     dev->conf.rx_reset = 0;
@@ -251,25 +215,28 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
 
     dev->timing.val = 0;
 
-    // Allocate DMA descriptors
     i2s_parallel_state_t *st = &i2s_state[i2snum(dev)];
-#ifdef DOUBLE_BUFFERED
+    // Allocate DMA descriptors
     st->desccount_a = calc_needed_dma_descs_for(cfg->bufa);
     ESP_LOGV(TAG, "st->descccount_a = %d", st->desccount_a);
-    st->desccount_b = calc_needed_dma_descs_for(cfg->bufb);
-    ESP_LOGV(TAG, "st->descccount_b = %d", st->desccount_b);
     st->dmadesc_a = heap_caps_malloc(st->desccount_a * sizeof(lldesc_t), MALLOC_CAP_DMA);
-    st->dmadesc_b = heap_caps_malloc(st->desccount_b * sizeof(lldesc_t), MALLOC_CAP_DMA);
     // and fill them
     fill_dma_desc(st->dmadesc_a, cfg->bufa);
-    fill_dma_desc(st->dmadesc_b, cfg->bufb);
-#else
-    st->desccount = calc_needed_dma_descs_for(cfg->buf);
-    ESP_LOGV(TAG, "st->descccount = %d", st->desccount);
-    st->dmadesc = heap_caps_malloc(st->desccount * sizeof(lldesc_t), MALLOC_CAP_DMA);
-    // and fill them
-    fill_dma_desc(st->dmadesc, cfg->buf);
-#endif
+
+    if (cfg->bufb)
+    {
+        // Allocate DMA descriptors
+        st->desccount_b = calc_needed_dma_descs_for(cfg->bufb);
+        ESP_LOGV(TAG, "st->descccount_b = %d", st->desccount_b);
+        st->dmadesc_b = heap_caps_malloc(st->desccount_b * sizeof(lldesc_t), MALLOC_CAP_DMA);
+        // and fill them
+        fill_dma_desc(st->dmadesc_b, cfg->bufb);
+    }
+    else
+    {
+        st->desccount_b = 0;
+        st->dmadesc_b = NULL;
+    }
 
     // Reset FIFO/DMA -> needed? Doesn't dma_reset/fifo_reset do this?
     dev->lc_conf.in_rst = 1;
@@ -289,22 +256,23 @@ void i2s_parallel_setup(i2s_dev_t *dev, const i2s_parallel_config_t *cfg)
 
     // Start dma on front buffer
     dev->lc_conf.val = I2S_OUT_DATA_BURST_EN | I2S_OUTDSCR_BURST_EN | I2S_OUT_DATA_BURST_EN;
-#ifdef DOUBLE_BUFFERED
     dev->out_link.addr = ((uint32_t)(&st->dmadesc_a[0]));
-#else
-    dev->out_link.addr = ((uint32_t)(&st->dmadesc[0]));
-#endif
     dev->out_link.start = 1;
     dev->conf.tx_start = 1;
 }
 
-#ifdef DOUBLE_BUFFERED
 // Flip to a buffer: 0 for bufa, 1 for bufb
 void i2s_parallel_flip_to_buffer(i2s_dev_t *dev, int bufid)
 {
     int no = i2snum(dev);
     lldesc_t *active_dma_chain;
-    if (bufid == 0)
+
+    if (i2s_state[no].dmadesc_b == NULL)
+    {
+        return;
+    }
+
+    if ((bufid == 0))
     {
         active_dma_chain = (lldesc_t *)&i2s_state[no].dmadesc_a[0];
     }
@@ -316,4 +284,3 @@ void i2s_parallel_flip_to_buffer(i2s_dev_t *dev, int bufid)
     i2s_state[no].dmadesc_a[i2s_state[no].desccount_a - 1].qe.stqe_next = active_dma_chain;
     i2s_state[no].dmadesc_b[i2s_state[no].desccount_b - 1].qe.stqe_next = active_dma_chain;
 }
-#endif

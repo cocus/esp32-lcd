@@ -1519,6 +1519,56 @@ UG_OBJECT* _UG_GetFreeObject( UG_WINDOW* wnd )
    return NULL;
 }
 
+UG_OBJECT* UG_FocusNext( UG_WINDOW* wnd )
+{
+   UG_U8 i;
+   UG_U8 focus_i;
+   UG_OBJECT* obj=(UG_OBJECT*)wnd->objlst;
+   UG_OBJECT* focused = gui->focused;
+
+   for(i=0;i<wnd->objcnt;i++)
+   {
+      obj = (UG_OBJECT*)(&wnd->objlst[i]);
+      if (obj == focused)
+      {
+         focus_i = i;
+         i++; // next object
+         for(;i<wnd->objcnt;i++)
+         {
+            obj = (UG_OBJECT*)(&wnd->objlst[i]);
+
+            if ((obj->state & OBJ_STATE_VISIBLE) &&
+               (obj->state & OBJ_STATE_VALID) &&
+               !(obj->state & OBJ_STATE_FREE) &&
+               !(obj->state & OBJ_STATE_FOCUS))
+            {
+               // switch to this one
+               UG_SetFocus(obj);
+               return obj;
+            }
+         }
+         // ok, start from the beginning
+         for(i=0;i<focus_i;i++)
+         {
+            obj = (UG_OBJECT*)(&wnd->objlst[i]);
+
+            if ((obj->state & OBJ_STATE_VISIBLE) &&
+               (obj->state & OBJ_STATE_VALID) &&
+               !(obj->state & OBJ_STATE_FREE) &&
+               !(obj->state & OBJ_STATE_FOCUS))
+            {
+               // switch to this one
+               UG_SetFocus(obj);
+               return obj;
+            }
+         }
+         break;
+      }
+   }
+
+   return NULL;
+}
+
 UG_RESULT _UG_DeleteObject( UG_WINDOW* wnd, UG_U8 type, UG_U8 id )
 {
    UG_OBJECT* obj=NULL;
@@ -1530,6 +1580,10 @@ UG_RESULT _UG_DeleteObject( UG_WINDOW* wnd, UG_U8 type, UG_U8 id )
    {
       /* We dont't want to delete a visible or busy object! */
       if ( (obj->state & OBJ_STATE_VISIBLE) || (obj->state & OBJ_STATE_UPDATE) ) return UG_RESULT_FAIL;
+      if ( gui->focused == obj )
+      {
+         UG_FocusNext( wnd );
+      }
       obj->state = OBJ_STATE_INIT;
       obj->data = NULL;
       obj->event = 0;

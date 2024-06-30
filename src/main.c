@@ -230,7 +230,7 @@ esp_err_t pwmInit(void)
 
     _pwm_queue = xQueueCreate(5, sizeof(uint8_t));
 
-    xTaskCreatePinnedToCore(&pwmTask, "pwm", 2048, NULL, 20, NULL, 1);
+    xTaskCreatePinnedToCore(&pwmTask, "pwm", 4096, NULL, 20, NULL, 1);
 
     return ESP_OK;
 }
@@ -508,9 +508,8 @@ void lcdTask(void *pvParameters)
             break;
 
         case BTN_UP:
-            obj = _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_0);
+            obj = UG_FocusNext(&wnd);// _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_0);
             ESP_LOGI(TAG, "set: up, obj %p", obj);
-            UG_SetFocus(obj);
             break;
 
         case BTN_DOWN:
@@ -530,48 +529,41 @@ void lcdTask(void *pvParameters)
 
 esp_err_t lcdInit(void)
 {
-#ifdef DOUBLE_BUFFERED
     i2s_parallel_buffer_desc_t bufdesc[2] = {
         {.memory = LCD_GetFrameBuffer(0), .size = FRAME_SIZE},
         {.memory = LCD_GetFrameBuffer(1), .size = FRAME_SIZE},
     };
-#else
-    i2s_parallel_buffer_desc_t bufdesc = {
-        .memory = LCD_GetFrameBuffer(), .size = FRAME_SIZE};
-#endif
 
     i2s_parallel_config_t cfg = {
         .gpio_bus = {
-            {.gpio = 19, .inverted = 0, .initial_value = 0}, // 0 : d0
-            {.gpio = 4, .inverted = 0, .initial_value = 0},  // 1 : d1
-            {.gpio = 2, .inverted = 0, .initial_value = 0},  // 2 : d2
-            {.gpio = 15, .inverted = 0, .initial_value = 0}, // 3 : d3
-            {.gpio = 17, .inverted = 0, .initial_value = 0}, // 4 : HS
-            {.gpio = 16, .inverted = 0, .initial_value = 0}, // 5 : VS
-            {.gpio = -1, .inverted = 0, .initial_value = 0}, // 6 : CLK_EN gate
+            [0] = {.gpio = 19, .inverted = 0}, // 0 : d0
+            [1] = {.gpio = 4, .inverted = 0},  // 1 : d1
+            [2] = {.gpio = 2, .inverted = 0},  // 2 : d2
+            [3] = {.gpio = 15, .inverted = 0}, // 3 : d3
+            [4] = {.gpio = 17, .inverted = 0}, // 4 : HS
+            [5] = {.gpio = 16, .inverted = 0}, // 5 : VS
+            [6] = {.gpio = -1, .inverted = 0}, // 6 : CLK_EN gate
         },
-        .num_gpio = 6,
         .gpio_clk = 5, // XCK
 
         .bits = I2S_PARALLEL_BITS_8,
         .clkspeed_hz = 2 * 1000 * 1500, // resulting pixel clock = 1.5MHz (~42fps)
 
-#ifdef DOUBLE_BUFFERED
         .bufa = &bufdesc[0],
-        .bufb = &bufdesc[1]
-#else
-        .buf = &bufdesc
-#endif
+        .bufb = NULL
     };
 
-#ifdef DOUBLE_BUFFERED
     // make sure both front and back buffers have encoded syncs
     LCD_SelectFrameBuffer(0);
     LCD_ClearScreen(0);
-    LCD_SelectFrameBuffer(1);
-#endif
-    // make sure buffer has encoded syncs
-    LCD_ClearScreen(0);
+
+    if (bufdesc[1].memory != NULL)
+    {
+        cfg.bufb = &bufdesc[1];
+
+        LCD_SelectFrameBuffer(1);
+        LCD_ClearScreen(0);
+    }
 
     gpio_set_direction(18, GPIO_MODE_OUTPUT);
     gpio_set_level(18, 0); // ENABLE
@@ -582,13 +574,11 @@ esp_err_t lcdInit(void)
     vTaskDelay(pdMS_TO_TICKS(50));
     gpio_set_level(18, 1); // ENABLE
 
-#ifdef DOUBLE_BUFFERED
     i2s_parallel_flip_to_buffer(&I2S1, LCD_GetFrameBufferSelected());
-#endif
 
     // Setup UGUI
-    device.x_dim = 640;
-    device.y_dim = 200;
+    device.x_dim = NUM_COLS;
+    device.y_dim = NUM_ROWS;
     device.pset = &esp32_lcd_thing_pset;
     device.flush = &esp32_lcd_thing_flush;
 

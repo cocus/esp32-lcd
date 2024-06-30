@@ -353,6 +353,9 @@ struct S_WINDOW
 #define WND_STYLE_3D                                  (1<<0)
 #define WND_STYLE_HIDE_TITLE                          (0<<1)
 #define WND_STYLE_SHOW_TITLE                          (1<<1)
+#define WND_STYLE_NON_FOCUSABLE                       (0<<2)
+#define WND_STYLE_FOCUSABLE                           (1<<2)
+
 
 /* -------------------------------------------------------------------------------- */
 /* -- µGUI DRIVER                                                                -- */
@@ -555,6 +558,7 @@ UG_S16 UG_WindowGetOuterWidth( UG_WINDOW* wnd );
 UG_S16 UG_WindowGetInnerHeight( UG_WINDOW* wnd );
 UG_S16 UG_WindowGetOuterHeight( UG_WINDOW* wnd );
 
+UG_OBJECT* UG_FocusNext( UG_WINDOW* wnd );
 UG_RESULT UG_SetFocus( UG_OBJECT* object );
 
 #endif
