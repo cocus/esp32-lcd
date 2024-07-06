@@ -7,7 +7,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
-#include "ugui.h"
+#include "ugui2.h"
+#include "ugui2_fonts.h"
+#include "ugui2_window.h"
+#include "ugui2_progress.h"
+#include "ugui2_button.h"
+#include "ugui2_checkbox.h"
 
 #include "i2s_parallel.h"
 #include "i2s_lcd4bit.h"
@@ -236,207 +241,76 @@ esp_err_t pwmInit(void)
 }
 
 
-
-#define MAX_OBJS 15
-
 // Global Vars
-UG_DEVICE device;
-UG_GUI ugui;
+UG2_DEVICE device;
 
-UG_WINDOW wnd;
-UG_BUTTON btn0;
-UG_BUTTON btn1;
-UG_BUTTON btn2;
-UG_BUTTON btn3;
-UG_CHECKBOX chb0;
-UG_CHECKBOX chb1;
-UG_CHECKBOX chb2;
-UG_CHECKBOX chb3;
-UG_TEXTBOX txt0;
-UG_TEXTBOX txt1;
-UG_TEXTBOX txt2;
-UG_TEXTBOX txt3;
-UG_PROGRESS pgb0;
-UG_PROGRESS pgb1;
-UG_OBJECT objs[MAX_OBJS];
 
-#define INITIAL_MARGIN 3
-#define BTN_WIDTH 100
-#define BTN_HEIGHT 30
-#define CHB_WIDTH 100
-#define CHB_HEIGHT 14
+UG2_WINDOW wnd;
+UG2_PROGRESS pgb0;
+UG2_BUTTON btn0;
+UG2_CHECKBOX chb0;
 
-#define OBJ_Y(i) BTN_HEIGHT *i + ((i + 1))
-
-void windowHandler(UG_MESSAGE *msg)
+UG2_RESULT btn_handler(UG2_MESSAGE* msg)
 {
-    static UG_U16 x0, y0;
+    if (!msg) return UG_RESULT_ARG;
 
-    (void)x0;
-    (void)y0;
-
-    // decode_msg(msg);
-
-#if defined(UGUI_USE_TOUCH)
-    if (msg->type == MSG_TYPE_OBJECT)
+    if (msg->obj == UG2_BaseObject(&btn0))
     {
-        UG_OBJECT *obj = msg->src;
-        if (obj)
+        UG_U8 pb = 0;
+        if ((msg->type == MSG_TOUCH_UP) ||
+            ((msg->type == MSG_KEY_UP) && (msg->id = ' ')))
         {
-            if (obj->touch_state & OBJ_TOUCH_STATE_CHANGED)
-                printf("|CHANGED");
-            if (obj->touch_state & OBJ_TOUCH_STATE_PRESSED_ON_OBJECT)
-                printf("|PRESSED_ON_OBJECT");
-            if (obj->touch_state & OBJ_TOUCH_STATE_PRESSED_OUTSIDE_OBJECT)
-                printf("|PRESSED_OUTSIDE_OBJECT");
-            if (obj->touch_state & OBJ_TOUCH_STATE_RELEASED_ON_OBJECT)
-                printf("|RELEASED_ON_OBJECT");
-            if (obj->touch_state & OBJ_TOUCH_STATE_RELEASED_OUTSIDE_OBJECT)
-                printf("|RELEASED_OUTSIDE_OBJECT");
-            if (obj->touch_state & OBJ_TOUCH_STATE_IS_PRESSED_ON_OBJECT)
-                printf("|IS_PRESSED_ON_OBJECT");
-            if (obj->touch_state & OBJ_TOUCH_STATE_IS_PRESSED)
-                printf("|IS_PRESSED");
-            if (obj->touch_state & OBJ_TOUCH_STATE_INIT)
-                printf("|INIT");
-            printf("\n");
-            if (obj->touch_state & OBJ_TOUCH_STATE_IS_PRESSED)
+            UG2_ProgressGetProgress(&pgb0, &pb);
+
+            if (++pb == 101)
             {
-                x0 = UG_GetGUI()->touch.xp;
-                y0 = UG_GetGUI()->touch.yp;
+                pb = 0;
             }
+
+            UG2_ProgressSetProgress(&pgb0, pb);
         }
-
-        if (UG_ProgressGetProgress(&wnd, PGB_ID_0) == 100)
-            UG_ProgressSetProgress(&wnd, PGB_ID_0, 0);
-        else
-            UG_ProgressSetProgress(&wnd, PGB_ID_0, UG_ProgressGetProgress(&wnd, PGB_ID_0) + 1);
-
-        if (UG_ProgressGetProgress(&wnd, PGB_ID_1) == 100)
-            UG_ProgressSetProgress(&wnd, PGB_ID_1, 0);
-        else
-            UG_ProgressSetProgress(&wnd, PGB_ID_1, UG_ProgressGetProgress(&wnd, PGB_ID_1) + 1);
     }
-#endif
-}
-char buffer[64] = {'\0'};
 
-void GUI_Setup(UG_DEVICE *device)
+    return UG_RESULT_MSG_UNHANDLED;
+}
+
+void GUI_DemoSetup(UG2_DEVICE* device)
 {
     // Setup Window
-    UG_WindowCreate(&wnd, objs, MAX_OBJS, &windowHandler);
-    wnd.xs = 120;
-    UG_WindowSetTitleTextFont(&wnd, FONT_6X8);
-    UG_WindowSetTitleText(&wnd, "App Title");
-
-    // Buttons
-    UG_ButtonCreate(&wnd, &btn0, BTN_ID_0, UGUI_POS(INITIAL_MARGIN, OBJ_Y(0), BTN_WIDTH, BTN_HEIGHT));
-    UG_ButtonSetFont(&wnd, BTN_ID_0, FONT_6X8);
-    UG_ButtonSetText(&wnd, BTN_ID_0, "Btn 3D");
-    UG_ButtonSetStyle(&wnd, BTN_ID_0, BTN_STYLE_3D);
-
-    UG_OBJECT *obj = _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_0);
-    UG_SetFocus(obj);
-
-    UG_ButtonCreate(&wnd, &btn1, BTN_ID_1, UGUI_POS(INITIAL_MARGIN, OBJ_Y(1), BTN_WIDTH, BTN_HEIGHT));
-    UG_ButtonSetFont(&wnd, BTN_ID_1, FONT_6X8);
-    UG_ButtonSetText(&wnd, BTN_ID_1, "Btn 2D T");
-    UG_ButtonSetStyle(&wnd, BTN_ID_1, BTN_STYLE_2D | BTN_STYLE_TOGGLE_COLORS);
-
-    UG_ButtonCreate(&wnd, &btn2, BTN_ID_2, UGUI_POS(INITIAL_MARGIN, OBJ_Y(2), BTN_WIDTH, BTN_HEIGHT));
-    UG_ButtonSetFont(&wnd, BTN_ID_2, FONT_6X8);
-    UG_ButtonSetText(&wnd, BTN_ID_2, "Btn 3D Alt");
-    UG_ButtonSetStyle(&wnd, BTN_ID_2, BTN_STYLE_3D | BTN_STYLE_USE_ALTERNATE_COLORS);
-    UG_ButtonSetAlternateForeColor(&wnd, BTN_ID_2, C_BLACK);
-    UG_ButtonSetAlternateBackColor(&wnd, BTN_ID_2, C_WHITE);
-
-    UG_ButtonCreate(&wnd, &btn3, BTN_ID_3, UGUI_POS(INITIAL_MARGIN, OBJ_Y(3), BTN_WIDTH, BTN_HEIGHT));
-    UG_ButtonSetFont(&wnd, BTN_ID_3, FONT_6X8);
-    UG_ButtonSetText(&wnd, BTN_ID_3, "Btn NoB");
-    UG_ButtonSetStyle(&wnd, BTN_ID_3, BTN_STYLE_NO_BORDERS | BTN_STYLE_TOGGLE_COLORS);
-
-    // Checkboxes
-    UG_CheckboxCreate(&wnd, &chb0, CHB_ID_0, UGUI_POS(INITIAL_MARGIN + 50 + BTN_WIDTH, OBJ_Y(0) + 7, CHB_WIDTH, CHB_HEIGHT));
-    UG_CheckboxSetFont(&wnd, CHB_ID_0, FONT_6X8);
-    UG_CheckboxSetText(&wnd, CHB_ID_0, "CHB");
-    UG_CheckboxSetStyle(&wnd, CHB_ID_0, CHB_STYLE_3D);
-    UG_CheckboxSetAlignment(&wnd, CHB_ID_0, ALIGN_TOP_LEFT);
-#if !defined(UGUI_USE_COLOR_BW)
-    UG_CheckboxSetBackColor(&wnd, CHB_ID_0, C_PALE_TURQUOISE);
-#endif
-
-    UG_CheckboxCreate(&wnd, &chb1, CHB_ID_1, UGUI_POS(INITIAL_MARGIN + 50 + BTN_WIDTH, OBJ_Y(1) + 7, CHB_WIDTH, CHB_HEIGHT));
-    UG_CheckboxSetFont(&wnd, CHB_ID_1, FONT_6X8);
-    UG_CheckboxSetText(&wnd, CHB_ID_1, "CHB");
-    UG_CheckboxSetStyle(&wnd, CHB_ID_1, CHB_STYLE_2D | CHB_STYLE_TOGGLE_COLORS);
-    UG_CheckboxSetAlignment(&wnd, CHB_ID_1, ALIGN_CENTER);
-    UG_CheckboxShow(&wnd, CHB_ID_1);
-
-    UG_CheckboxCreate(&wnd, &chb2, CHB_ID_2, UGUI_POS(INITIAL_MARGIN + 50 + BTN_WIDTH, OBJ_Y(2) + 7, CHB_WIDTH, CHB_HEIGHT));
-    UG_CheckboxSetFont(&wnd, CHB_ID_2, FONT_6X8);
-    UG_CheckboxSetText(&wnd, CHB_ID_2, "CHB");
-    UG_CheckboxSetStyle(&wnd, CHB_ID_2, CHB_STYLE_3D | CHB_STYLE_USE_ALTERNATE_COLORS);
-    UG_CheckboxSetAlignment(&wnd, CHB_ID_2, ALIGN_BOTTOM_LEFT);
-    UG_CheckboxShow(&wnd, CHB_ID_2);
-
-    UG_CheckboxCreate(&wnd, &chb3, CHB_ID_3, UGUI_POS(INITIAL_MARGIN + 50 + BTN_WIDTH, OBJ_Y(3) + 7, CHB_WIDTH, CHB_HEIGHT));
-    UG_CheckboxSetFont(&wnd, CHB_ID_3, FONT_6X8);
-    UG_CheckboxSetText(&wnd, CHB_ID_3, "CHB");
-    UG_CheckboxSetStyle(&wnd, CHB_ID_3, CHB_STYLE_NO_BORDERS | CHB_STYLE_TOGGLE_COLORS);
-    UG_CheckboxSetAlignment(&wnd, CHB_ID_3, ALIGN_BOTTOM_RIGHT);
-    UG_CheckboxShow(&wnd, CHB_ID_3);
-
-    // Texts
-    UG_TextboxCreate(&wnd, &txt0, TXB_ID_0, UGUI_POS(INITIAL_MARGIN * 2 + BTN_WIDTH + CHB_WIDTH, OBJ_Y(0), 100, 15));
-    UG_TextboxSetFont(&wnd, TXB_ID_0, FONT_4X6);
-    UG_TextboxSetText(&wnd, TXB_ID_0, "Small TEXT");
-#if !defined(UGUI_USE_COLOR_BW)
-    UG_TextboxSetBackColor(&wnd, TXB_ID_0, C_PALE_TURQUOISE);
-#endif
-
-    UG_TextboxCreate(&wnd, &txt1, TXB_ID_1, UGUI_POS(INITIAL_MARGIN + 50 + BTN_WIDTH + CHB_WIDTH, OBJ_Y(1) - 15, 200, 30));
-    UG_TextboxSetFont(&wnd, TXB_ID_1, FONT_12X20);
-    snprintf(buffer, sizeof(buffer), "%s", esp_app_get_description()->date); //, esp_app_get_description()->time);
-    ESP_LOGI(TAG, "buffer is '%s'", buffer);
-    UG_TextboxSetText(&wnd, TXB_ID_1, buffer);
-#if !defined(UGUI_USE_COLOR_BW)
-    UG_TextboxSetBackColor(&wnd, TXB_ID_1, C_PALE_TURQUOISE);
-#endif
-    UG_TextboxSetAlignment(&wnd, TXB_ID_1, ALIGN_TOP_RIGHT);
-
-    UG_TextboxCreate(&wnd, &txt2, TXB_ID_2, UGUI_POS(INITIAL_MARGIN * 2 + BTN_WIDTH + CHB_WIDTH, OBJ_Y(2) - 15, 100, 45));
-    UG_TextboxSetFont(&wnd, TXB_ID_2, FONT_24X40);
-    UG_TextboxSetText(&wnd, TXB_ID_2, "Text");
-#if !defined(UGUI_USE_COLOR_BW)
-    UG_TextboxSetBackColor(&wnd, TXB_ID_2, C_PALE_TURQUOISE);
-#endif
-
-    UG_TextboxCreate(&wnd, &txt3, TXB_ID_3, UGUI_POS(INITIAL_MARGIN * 2 + BTN_WIDTH + CHB_WIDTH, OBJ_Y(3), 100, 53));
-    UG_TextboxSetFont(&wnd, TXB_ID_3, FONT_32X53);
-    UG_TextboxSetText(&wnd, TXB_ID_3, "50");
-#if !defined(UGUI_USE_COLOR_BW)
-    UG_TextboxSetBackColor(&wnd, TXB_ID_3, C_PALE_TURQUOISE);
-#endif
+    UG2_WindowInitialize(&wnd, NULL, 120, 0, (640-120), 200, NULL);
+    UG2_ObjectSetFont(UG2_BaseObject(&wnd), FONT_6X8);
+    UG2_ObjectSetText(UG2_BaseObject(&wnd), "uGUI2 - Window Title!");
+    UG2_ShowObject(UG2_BaseObject(&wnd));
 
     // Progress Bar
-    UG_ProgressCreate(&wnd, &pgb0, PGB_ID_0, UGUI_POS(INITIAL_MARGIN, OBJ_Y(4) + 20, 157, 20));
-    UG_ProgressSetProgress(&wnd, PGB_ID_0, 50);
+    UG2_ProgressInitialize(&pgb0, UG2_BaseObject(&wnd), 10, 10, 80, 20, NULL);
+#ifndef UGUI2_USE_COLOR_BW
+    UG2_ObjectSetForeColor(UG2_BaseObject(&pgb0), C_DARK_BLUE);
+#endif
+    UG2_ProgressSetProgress(&pgb0, 50);
+    UG2_ShowObject(UG2_BaseObject(&pgb0));
 
-    UG_ProgressCreate(&wnd, &pgb1, PGB_ID_1, UGUI_POS(159 + INITIAL_MARGIN * 2, OBJ_Y(4) + 25, 156, 10));
-    UG_ProgressSetStyle(&wnd, PGB_ID_1, PGB_STYLE_2D | PGB_STYLE_FORE_COLOR_MESH);
-    UG_ProgressSetProgress(&wnd, PGB_ID_1, 75);
+    // Buttons
+    UG2_ButtonInitialize(&btn0, UG2_BaseObject(&wnd), 10, 35, 80, 40, btn_handler);
+    UG2_ObjectSetFont(UG2_BaseObject(&btn0), FONT_6X8);
+    UG2_ObjectSetText(UG2_BaseObject(&btn0), "Button!");
+    UG2_ShowObject(UG2_BaseObject(&btn0));
 
-    UG_WindowShow(&wnd);
+    UG2_CheckboxInitialize(&chb0, UG2_BaseObject(&wnd), 10, 80, 80, 14, NULL);
+    UG2_ObjectSetFont(UG2_BaseObject(&chb0), FONT_6X8);
+    UG2_ObjectSetText(UG2_BaseObject(&chb0), "Checkbox");
+    UG2_ShowObject(UG2_BaseObject(&chb0));
 }
 
 void GUI_Process()
 {
-    UG_Update();
+    //UG_Update();
 }
 
 // Internal
-void esp32_lcd_thing_pset(UG_S16 x, UG_S16 y, UG_COLOR c)
+void esp32_lcd_thing_pset(UG2_POS_T x, UG2_POS_T y, const UG2_COLOR c)
 {
+#ifdef UGUI2_USE_COLOR_BW
     if (c != C_WHITE)
     {
         LCD_PixelSet(x, y, true);
@@ -445,6 +319,9 @@ void esp32_lcd_thing_pset(UG_S16 x, UG_S16 y, UG_COLOR c)
     {
         LCD_PixelSet(x, y, false);
     }
+#else
+#error "not supported"
+#endif
 }
 
 void esp32_lcd_thing_flush(void)
@@ -460,7 +337,7 @@ void lcdTask(void *pvParameters)
     char text_buffer[10] = {'\0'};
     uint8_t pb = 50;
 
-    GUI_Setup(&device);
+    GUI_DemoSetup(&device);
 
     while (1)
     {
@@ -470,57 +347,10 @@ void lcdTask(void *pvParameters)
             goto update_screen;
         }
 
-        if (ev.pressed == false)
-        {
-            goto update_screen;
-        }
-
-        UG_OBJECT *obj = NULL;
-        switch (ev.btn)
-        {
-        case BTN_RIGHT:
-            pb += 5;
-            if (pb > 100)
-                pb = 100;
-            UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
-            // Set duty to 50%
-            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2 * 13 * pb)));
-            // Update duty to apply the new value
-            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-            snprintf(text_buffer, sizeof(text_buffer), "%d", pb);
-            UG_TextboxSetText(&wnd, TXB_ID_3, text_buffer);
-            xQueueSend(_pwm_queue, &pb, 0);
-
-            break;
-
-        case BTN_LEFT:
-            if (pb >= 5)
-                pb -= 5;
-            UG_ProgressSetProgress(&wnd, PGB_ID_0, pb);
-            // Set duty to 50%
-            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, (2 * 13 * pb)));
-            // Update duty to apply the new value
-            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-            snprintf(text_buffer, sizeof(text_buffer), "%d", pb);
-            UG_TextboxSetText(&wnd, TXB_ID_3, text_buffer);
-            xQueueSend(_pwm_queue, &pb, 0);
-
-            break;
-
-        case BTN_UP:
-            obj = UG_FocusNext(&wnd);// _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_0);
-            ESP_LOGI(TAG, "set: up, obj %p", obj);
-            break;
-
-        case BTN_DOWN:
-            obj = _UG_SearchObject(&wnd, OBJ_TYPE_BUTTON, BTN_ID_2);
-            ESP_LOGI(TAG, "set: down, obj %p", obj);
-            UG_SetFocus(obj);
-            break;
-
-        default:
-            break;
-        };
+        if (ev.btn == BTN_RIGHT)
+            UG2_SystemSendMessage(ev.pressed ? MSG_KEY_DOWN : MSG_KEY_UP, '\t', 0, 0, NULL);
+        else if (ev.btn == BTN_HELP)
+            UG2_SystemSendMessage(ev.pressed ? MSG_KEY_DOWN : MSG_KEY_UP, ' ', 0, 0, NULL);
 
     update_screen:
         GUI_Process();
@@ -583,10 +413,7 @@ esp_err_t lcdInit(void)
     device.flush = &esp32_lcd_thing_flush;
 
     // Setup UGUI
-    UG_Init(&ugui, &device);
-
-    // clear background
-    UG_FillScreen(C_WHITE);
+    UG2_Init(&device);
 
     xTaskCreatePinnedToCore(&lcdTask, "lcdTask", 4096, NULL, 20, NULL, 1);
 

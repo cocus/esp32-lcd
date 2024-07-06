@@ -1,7 +1,7 @@
-#include "ugui.h"
+#include "ugui2.h"
 
-#ifdef UGUI_USE_FONT_6X8
-UG_FONT FONT_6X8[]={
+#ifdef UGUI2_USE_FONT_6X8
+UG2_FONT FONT_6X8[]={
   // BPP, Width, Height, Chars, Offsets, Bytes per char, Widths presence bit
   0x80,0x06,0x08,0x00,0xFF,0x00,0x02,0x00,0x08,0x00,
   // Offsets

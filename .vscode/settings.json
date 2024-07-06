@@ -6,6 +6,24 @@
         "tcpip_adapter.h": "c",
         "i2s_parallel.h": "c",
         "i2s_struct.h": "c",
-        "config.h": "c"
+        "config.h": "c",
+        "common.h": "c",
+        "gfx3d.h": "c",
+        "font_bignum.h": "c",
+        "font_6x8.h": "c",
+        "i2c_master.h": "c",
+        "i2s_lcd4bit.h": "c",
+        "stdint.h": "c",
+        "queue.h": "c",
+        "esp_timer.h": "c",
+        "freertos.h": "c",
+        "esp_log.h": "c",
+        "gpio_periph.h": "c",
+        "ugui_colors.h": "c",
+        "ugui_checkbox.h": "c",
+        "ugui2.h": "c",
+        "ugui2_fonts.h": "c",
+        "ugui2_button.h": "c",
+        "ugui2_colors.h": "c"
     }
 }

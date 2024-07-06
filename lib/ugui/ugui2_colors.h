@@ -1,12 +1,11 @@
-#ifndef __UGUI_COLORS_H
-#define __UGUI_COLORS_H
+#pragma once
 
 /* -------------------------------------------------------------------------------- */
-/* -- µGUI COLORS                                                                -- */
+/* -- uGUI COLORS                                                                -- */
 /* -- Source: http://www.rapidtables.com/web/color/RGB_Color.htm                 -- */
 /* -------------------------------------------------------------------------------- */
 
-#if defined(UGUI_USE_COLOR_RGB565)
+#if defined(UGUI2_USE_COLOR_RGB565)
 
 #define C_MAROON                     0x8000
 #define C_DARK_RED                   0x8800
@@ -153,7 +152,7 @@
 #define C_WHITE_89                   0xE71C // 89% White
 #define C_WHITE_94                   0xEF7D // 94% White
 
-#elif defined(UGUI_USE_COLOR_RGB888)
+#elif defined(UGUI2_USE_COLOR_RGB888)
 
 #define C_MAROON                     0x800000
 #define C_DARK_RED                   0x8B0000
@@ -300,11 +299,10 @@
 #define C_WHITE_89                   0xE3E3E3 // 89% White
 #define C_WHITE_94                   0xF0F0F0 // 94% White
 
-#elif defined(UGUI_USE_COLOR_BW)
+#elif defined(UGUI2_USE_COLOR_BW)
 
 #define C_BLACK                      0x00
 #define C_WHITE                      0xFF
 
 #endif
 
-#endif // __UGUI_COLORS_H
